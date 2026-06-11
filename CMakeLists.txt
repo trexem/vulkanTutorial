@@ -144,6 +144,13 @@ file(GLOB_RECURSE SOURCE_FILES
 # Create the main game executable target using the project name (VulkanTutorial)
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 
+file(GLOB MODULE_FILES "${PROJECT_SOURCE_DIR}/src/*.cppm")
+
+target_sources(${PROJECT_NAME} PUBLIC
+ FILE_SET CXX_MODULES FILES
+ ${MODULE_FILES}
+)
+
 # Add header files
 target_include_directories(${PROJECT_NAME} PRIVATE "${PROJECT_SOURCE_DIR}/include")
 
