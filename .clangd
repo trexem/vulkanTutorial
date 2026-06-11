@@ -1,0 +1,23 @@
+CompileFlags:
+  Add: [
+    "-std=c++23",
+    "-I/home/trexem/vulkansdk/default/x86_64/include",
+    "-include", "vulkan/vulkan.hpp",
+    "-DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1",
+    "-DVULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1"
+  ]
+  Remove: [
+    "-fmodules",
+    "-fmodules-ts",
+    "-fmodule-mapper=*",
+    "-fdeps-format=*"
+  ]
+
+Diagnostics:
+  Suppress: [
+    "module_not_found",
+    "module_import_not_found"
+  ]
+
+Index:
+  Background: Build
