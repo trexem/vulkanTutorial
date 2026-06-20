@@ -1,25 +1,24 @@
 module;
 
-#include <cstdlib>
-#include <cstring>  // For strcmp
-#include <exception>
+#include <vulkan/vulkan_core.h>
+// vulkan_core must go before glfw
+#include <GLFW/glfw3.h>
 
-#if defined(__INTELLISENSE__) || defined(__clang__)
+// Block for my LSP
+#if defined(__clang__)
+#include <algorithm>
+#include <iostream>
+#include <ranges>
+#include <string>
 #include <vulkan/vulkan_raii.hpp>
 #endif
 
 export module vulkan_tutorial;
 
-#if !defined(__INTELLISENSE__) && !defined(__clang__)
+#if !defined(__clang__)
 import vulkan;
 import std;
-#else
-#include <algorithm>
-#include <iostream>
-#include <ranges>
-#include <string>
 #endif
-#include <GLFW/glfw3.h>
 
 constexpr uint32_t WIDTH = 1920;
 constexpr uint32_t HEIGHT = 1080;
@@ -53,6 +52,7 @@ export class VulkanTutorial {
   void initVulkan() {
     createInstance();
     setupDebugMessenger();
+    createSurface();
     pickPhysicalDevice();
     createLogicalDevice();
   }
@@ -154,6 +154,14 @@ export class VulkanTutorial {
         instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoExt);
   }
 
+  void createSurface() {
+    VkSurfaceKHR _surface;
+    if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0) {
+      throw std::runtime_error("failed to create window surface!");
+    }
+    surface = vk::raii::SurfaceKHR(instance, _surface);
+  }
+
   void pickPhysicalDevice() {
     std::vector<vk::raii::PhysicalDevice> physicalDevices =
         instance.enumeratePhysicalDevices();
@@ -210,14 +218,21 @@ export class VulkanTutorial {
   void createLogicalDevice() {
     std::vector<vk::QueueFamilyProperties> queueFamilyProperties =
         physicalDevice.getQueueFamilyProperties();
-    auto graphicsQueueFamilyProperty =
-        std::ranges::find_if(queueFamilyProperties, [](auto const& qfp) {
-          return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) !=
-                 static_cast<vk::QueueFlags>(0);
-        });
-    auto graphicsIndex = static_cast<uint32_t>(std::distance(
-        queueFamilyProperties.begin(), graphicsQueueFamilyProperty));
 
+    uint32_t queueIndex = ~0;
+    for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size();
+         qfpIndex++) {
+      if ((queueFamilyProperties[qfpIndex].queueFlags &
+           vk::QueueFlagBits::eGraphics) &&
+          physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface)) {
+        queueIndex = qfpIndex;
+        break;
+      }
+    }
+    if (queueIndex == ~0) {
+      throw std::runtime_error(
+          "Could not find a queue for graphics and present -> terminating");
+    }
     float queuePriority = 0.5f;
 
     vk::StructureChain<vk::PhysicalDeviceFeatures2,
@@ -234,7 +249,7 @@ export class VulkanTutorial {
         };
 
     vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
-        .queueFamilyIndex = graphicsIndex,
+        .queueFamilyIndex = queueIndex,
         .queueCount = 1,
         .pQueuePriorities = &queuePriority};
     vk::DeviceCreateInfo deviceCreateInfo{
@@ -246,7 +261,7 @@ export class VulkanTutorial {
         .ppEnabledExtensionNames = requiredDeviceExtension.data()};
 
     device = vk::raii::Device(physicalDevice, deviceCreateInfo);
-    graphicsQueue = vk::raii::Queue(device, graphicsIndex, 0);
+    graphicsQueue = vk::raii::Queue(device, queueIndex, 0);
   }
 
   void mainLoop() {
@@ -267,6 +282,7 @@ export class VulkanTutorial {
   vk::raii::Context context;
   vk::raii::Instance instance = nullptr;
   vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
+  vk::raii::SurfaceKHR surface = nullptr;
   vk::raii::PhysicalDevice physicalDevice = nullptr;
   vk::raii::Device device = nullptr;
   vk::raii::Queue graphicsQueue = nullptr;
