@@ -4,12 +4,20 @@ module;
 #include <cstring>  // For strcmp
 #include <exception>
 
-export module vulkan_tutorial;
-#if defined(__INTELLISENSE__)
+#if defined(__INTELLISENSE__) || defined(__clang__)
 #include <vulkan/vulkan_raii.hpp>
-#else
+#endif
+
+export module vulkan_tutorial;
+
+#if !defined(__INTELLISENSE__) && !defined(__clang__)
 import vulkan;
 import std;
+#else
+#include <algorithm>
+#include <iostream>
+#include <ranges>
+#include <string>
 #endif
 #include <GLFW/glfw3.h>
 
@@ -45,6 +53,7 @@ export class VulkanTutorial {
   void initVulkan() {
     createInstance();
     setupDebugMessenger();
+    pickPhysicalDevice();
   }
 
   void createInstance() {
@@ -144,6 +153,59 @@ export class VulkanTutorial {
         instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoExt);
   }
 
+  void pickPhysicalDevice() {
+    std::vector<vk::raii::PhysicalDevice> physicalDevices =
+        instance.enumeratePhysicalDevices();
+    auto const devIt =
+        std::ranges::find_if(physicalDevices, [&](auto const& physicalDevice) {
+          return isDeviceSuitable(physicalDevice);
+        });
+    if (devIt == physicalDevices.end()) {
+      throw std::runtime_error("failed to find a suitable GPU!");
+    }
+    physicalDevice = *devIt;
+  }
+
+  bool isDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice) {
+    auto deviceProperties = physicalDevice.getProperties();
+    auto deviceFeatures = physicalDevice.getFeatures();
+    auto queueFamilies = physicalDevice.getQueueFamilyProperties();
+    std::vector<const char*> requiredDeviceExtensions = {
+        vk::KHRSwapchainExtensionName};
+    auto availableDeviceExtensions =
+        physicalDevice.enumerateDeviceExtensionProperties();
+    auto features = physicalDevice.template getFeatures2<
+        vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
+        vk::PhysicalDeviceVulkan13Features,
+        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    bool supportsRequiredFeatures =
+        features.template get<vk::PhysicalDeviceVulkan11Features>()
+            .shaderDrawParameters &&
+        features.template get<vk::PhysicalDeviceVulkan13Features>()
+            .dynamicRendering &&
+        features
+            .template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>()
+            .extendedDynamicState;
+
+    bool supportsVulkan1_4 = deviceProperties.apiVersion >= vk::ApiVersion14;
+    bool supportsGraphics =
+        std::ranges::any_of(queueFamilies, [](auto const& qfp) {
+          return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
+        });
+    bool supportsAllRequiredExtensions = std::ranges::all_of(
+        requiredDeviceExtensions,
+        [&availableDeviceExtensions](auto const& requiredDeviceExtension) {
+          return std::ranges::any_of(
+              availableDeviceExtensions,
+              [requiredDeviceExtension](auto const& availableDeviceExtension) {
+                return strcmp(availableDeviceExtension.extensionName,
+                              requiredDeviceExtension) == 0;
+              });
+        });
+    return supportsVulkan1_4 && supportsGraphics &&
+           supportsAllRequiredExtensions && supportsRequiredFeatures;
+  }
+
   void mainLoop() {
     while (!glfwWindowShouldClose(window)) {
       glfwPollEvents();
@@ -162,4 +224,5 @@ export class VulkanTutorial {
   vk::raii::Context context;
   vk::raii::Instance instance = nullptr;
   vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
+  vk::raii::PhysicalDevice physicalDevice = nullptr;
 };
