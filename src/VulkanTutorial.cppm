@@ -386,6 +386,51 @@ export class VulkanTutorial {
 
     vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo,
                                                         fragShaderStageInfo};
+    vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
+    vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
+        .topology = vk::PrimitiveTopology::eTriangleList};
+    vk::Viewport viewport{0.0f,
+                          0.0f,
+                          static_cast<float>(swapChainExtent.width),
+                          static_cast<float>(swapChainExtent.height),
+                          0.0f,
+                          1.0f};
+    vk::Rect2D scissor{vk::Offset2D{0, 0}, swapChainExtent};
+    std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport,
+                                                   vk::DynamicState::eScissor};
+    vk::PipelineDynamicStateCreateInfo dynamicState{
+        .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+        .pDynamicStates = dynamicStates.data()};
+    vk::PipelineViewportStateCreateInfo viewPortState{.viewportCount = 1,
+                                                      .scissorCount = 1};
+
+    vk::PipelineRasterizationStateCreateInfo rasterizer{
+        .depthClampEnable = vk::False,
+        .rasterizerDiscardEnable = vk::False,
+        .polygonMode = vk::PolygonMode::eFill,
+        .cullMode = vk::CullModeFlagBits::eBack,
+        .frontFace = vk::FrontFace::eClockwise,
+        .depthBiasEnable = vk::False,
+        .lineWidth = 1.0f};
+    vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+        .blendEnable = vk::True,
+        .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
+        .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+        .colorBlendOp = vk::BlendOp::eAdd,
+        .srcAlphaBlendFactor = vk::BlendFactor::eOne,
+        .dstAlphaBlendFactor = vk::BlendFactor::eZero,
+        .alphaBlendOp = vk::BlendOp::eAdd,
+        .colorWriteMask =
+            vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+            vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
+    vk::PipelineColorBlendStateCreateInfo colorBlending{
+        .logicOpEnable = vk::True,
+        .logicOp = vk::LogicOp::eAnd,
+        .attachmentCount = 1,
+        .pAttachments = &colorBlendAttachment};
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+        .setLayoutCount = 0, .pushConstantRangeCount = 0};
+    pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
   }
 
   [[nodiscard]] vk::raii::ShaderModule createShaderModule(
@@ -436,6 +481,7 @@ export class VulkanTutorial {
   vk::raii::Device device = nullptr;
   vk::raii::Queue graphicsQueue = nullptr;
   vk::raii::SwapchainKHR swapChain = nullptr;
+  vk::raii::PipelineLayout pipelineLayout = nullptr;
   std::vector<vk::Image> swapChainImages;
   vk::SurfaceFormatKHR swapChainSurfaceFormat;
   vk::Extent2D swapChainExtent;
