@@ -13,7 +13,6 @@ module;
 #include <fstream>
 #include <iostream>
 #include <limits>
-#include <ranges>
 #include <string>
 #include <vulkan/vulkan_raii.hpp>
 #endif
@@ -370,6 +369,7 @@ export class VulkanTutorial {
   }
 
   void createGraphicsPipeline() {
+    // Shader stages
     vk::raii::ShaderModule shaderModule =
         createShaderModule(readFile("shaders/shader_slang.spv"));
 
@@ -386,21 +386,29 @@ export class VulkanTutorial {
 
     vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo,
                                                         fragShaderStageInfo};
+
+    // Fixed functions
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
+
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
         .topology = vk::PrimitiveTopology::eTriangleList};
+
     vk::Viewport viewport{0.0f,
                           0.0f,
                           static_cast<float>(swapChainExtent.width),
                           static_cast<float>(swapChainExtent.height),
                           0.0f,
                           1.0f};
+
     vk::Rect2D scissor{vk::Offset2D{0, 0}, swapChainExtent};
+
     std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport,
                                                    vk::DynamicState::eScissor};
+
     vk::PipelineDynamicStateCreateInfo dynamicState{
         .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
         .pDynamicStates = dynamicStates.data()};
+
     vk::PipelineViewportStateCreateInfo viewPortState{.viewportCount = 1,
                                                       .scissorCount = 1};
 
@@ -412,6 +420,11 @@ export class VulkanTutorial {
         .frontFace = vk::FrontFace::eClockwise,
         .depthBiasEnable = vk::False,
         .lineWidth = 1.0f};
+
+    vk::PipelineMultisampleStateCreateInfo multisampling{
+        .rasterizationSamples = vk::SampleCountFlagBits::e1,
+        .sampleShadingEnable = vk::False};
+
     vk::PipelineColorBlendAttachmentState colorBlendAttachment{
         .blendEnable = vk::True,
         .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
@@ -428,9 +441,29 @@ export class VulkanTutorial {
         .logicOp = vk::LogicOp::eAnd,
         .attachmentCount = 1,
         .pAttachments = &colorBlendAttachment};
+
+    // Pipeline layout
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
         .setLayoutCount = 0, .pushConstantRangeCount = 0};
     pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+
+    // Render passes for dynamic rendering
+    vk::StructureChain<vk::GraphicsPipelineCreateInfo,
+                       vk::PipelineRenderingCreateInfo>
+        pipelineCreateInfoChain = {
+            {.stageCount = 2,
+             .pStages = shaderStages,
+             .pVertexInputState = &vertexInputInfo,
+             .pInputAssemblyState = &inputAssembly,
+             .pViewportState = &viewPortState,
+             .pRasterizationState = &rasterizer,
+             .pMultisampleState = &multisampling,
+             .pColorBlendState = &colorBlending,
+             .pDynamicState = &dynamicState,
+             .layout = pipelineLayout,
+             .renderPass = nullptr},
+            {.colorAttachmentCount = 1,
+             .pColorAttachmentFormats = &swapChainSurfaceFormat.format}};
   }
 
   [[nodiscard]] vk::raii::ShaderModule createShaderModule(
