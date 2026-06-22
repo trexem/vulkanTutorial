@@ -1,6 +1,6 @@
 #!/bin/bash
 
 cd build/
-./VulkanTutorial
+./EngineVulkan
 cd ../
 

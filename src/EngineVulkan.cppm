@@ -17,7 +17,9 @@ module;
 #include <vulkan/vulkan_raii.hpp>
 #endif
 
-export module vulkan_tutorial;
+export module engine_vulkan;
+
+export import :context;
 
 #if !defined(__clang__)
 import vulkan;
@@ -28,14 +30,6 @@ constexpr uint32_t WIDTH = 1920;
 constexpr uint32_t HEIGHT = 1080;
 
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
-
-const std::vector<char const*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
-
-#ifdef NDEBUG
-constexpr bool enableValidationLayers = false;
-#else
-constexpr bool enableValidationLayers = true;
-#endif
 
 export class VulkanTutorial {
  public:
@@ -57,9 +51,7 @@ export class VulkanTutorial {
   }
 
   void initVulkan() {
-    createInstance();
-    setupDebugMessenger();
-    createSurface();
+    context.init(window);
     pickPhysicalDevice();
     createLogicalDevice();
     createSwapChain();
@@ -75,107 +67,9 @@ export class VulkanTutorial {
     app->frameBufferResized = true;
   }
 
-  void createInstance() {
-    constexpr vk::ApplicationInfo appInfo{.pApplicationName = "VulkanTutorial",
-                                          .applicationVersion = vk::makeVersion(1, 0, 0),
-                                          .pEngineName = "Trexem Engine",
-                                          .engineVersion = vk::makeVersion(1, 0, 0),
-                                          .apiVersion = vk::ApiVersion14};
-
-    std::vector<char const*> requiredLayers;
-    if (enableValidationLayers) {
-      requiredLayers.assign(validationLayers.begin(), validationLayers.end());
-    }
-
-    auto layerProperties = context.enumerateInstanceLayerProperties();
-    auto unsupportedLayerIt = std::ranges::find_if(
-        requiredLayers, [&layerProperties](auto const& requiredLayer) {
-          return std::ranges::none_of(
-              layerProperties, [requiredLayer](auto const& layerProperty) {
-                return strcmp(layerProperty.layerName, requiredLayer) == 0;
-              });
-        });
-
-    if (unsupportedLayerIt != requiredLayers.end()) {
-      throw std::runtime_error("Required layer not supported: " +
-                               std::string(*unsupportedLayerIt));
-    }
-
-    // Get the required extensions
-    auto requiredExtensions = getRequiredInstanceExtensions();
-
-    auto extensionProperties = context.enumerateInstanceExtensionProperties();
-    auto unsupportedPropertyIt = std::ranges::find_if(
-        requiredExtensions, [&extensionProperties](auto const& requiredExtension) {
-          return std::ranges::none_of(
-              extensionProperties, [requiredExtension](auto const& extensionProperty) {
-                return strcmp(extensionProperty.extensionName, requiredExtension) == 0;
-              });
-        });
-    if (unsupportedPropertyIt != requiredExtensions.end()) {
-      throw std::runtime_error("Required extension not supported: " +
-                               std::string(*unsupportedPropertyIt));
-    }
-
-    vk::InstanceCreateInfo createInfo{
-        .pApplicationInfo = &appInfo,
-        .enabledLayerCount = static_cast<uint32_t>(requiredLayers.size()),
-        .ppEnabledLayerNames = requiredLayers.data(),
-        .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
-        .ppEnabledExtensionNames = requiredExtensions.data()};
-
-    instance = vk::raii::Instance(context, createInfo);
-  }
-
-  std::vector<const char*> getRequiredInstanceExtensions() {
-    uint32_t glfwExtensionCount = 0;
-    auto glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-    std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-    if (enableValidationLayers) {
-      extensions.push_back(vk::EXTDebugUtilsExtensionName);
-    }
-    return extensions;
-  }
-
-  static vk::Bool32 debugCallback(
-      vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
-      vk::DebugUtilsMessageTypeFlagsEXT type,
-      const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
-    std::cerr << "validation layer: type " << to_string(type)
-              << " msg: " << pCallbackData->pMessage << std::endl;
-
-    return vk::False;
-  }
-
-  void setupDebugMessenger() {
-    if (!enableValidationLayers) return;
-
-    vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(
-        vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
-    vk::DebugUtilsMessageTypeFlagsEXT messageTypeFlags(
-        vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
-        vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
-        vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
-    vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoExt{
-        .messageSeverity = severityFlags,
-        .messageType = messageTypeFlags,
-        .pfnUserCallback = &debugCallback};
-    debugMessenger =
-        instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoExt);
-  }
-
-  void createSurface() {
-    VkSurfaceKHR _surface;
-    if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0) {
-      throw std::runtime_error("failed to create window surface!");
-    }
-    surface = vk::raii::SurfaceKHR(instance, _surface);
-  }
-
   void pickPhysicalDevice() {
     std::vector<vk::raii::PhysicalDevice> physicalDevices =
-        instance.enumeratePhysicalDevices();
+        context.instance.enumeratePhysicalDevices();
     auto const devIt = std::ranges::find_if(
         physicalDevices,
         [&](auto const& physicalDevice) { return isDeviceSuitable(physicalDevice); });
@@ -226,7 +120,7 @@ export class VulkanTutorial {
 
     for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++) {
       if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
-          physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface)) {
+          physicalDevice.getSurfaceSupportKHR(qfpIndex, *context.surface)) {
         queueIndex = qfpIndex;
         break;
       }
@@ -314,20 +208,20 @@ export class VulkanTutorial {
 
   void createSwapChain() {
     vk::SurfaceCapabilitiesKHR surfaceCapabilities =
-        physicalDevice.getSurfaceCapabilitiesKHR(*surface);
+        physicalDevice.getSurfaceCapabilitiesKHR(*context.surface);
     swapChainExtent = chooseSwapExtent(surfaceCapabilities);
     uint32_t minImageCount = chooseSwapMinImageCount(surfaceCapabilities);
 
     std::vector<vk::SurfaceFormatKHR> availableFormats =
-        physicalDevice.getSurfaceFormatsKHR(*surface);
+        physicalDevice.getSurfaceFormatsKHR(*context.surface);
     swapChainSurfaceFormat = chooseSwapSurfaceFormat(availableFormats);
 
     std::vector<vk::PresentModeKHR> availablePresentModes =
-        physicalDevice.getSurfacePresentModesKHR(*surface);
+        physicalDevice.getSurfacePresentModesKHR(*context.surface);
     vk::PresentModeKHR presentMode = chooseSwapPresentMode(availablePresentModes);
 
     vk::SwapchainCreateInfoKHR swapChainCreateInfo{
-        .surface = *surface,
+        .surface = *context.surface,
         .minImageCount = minImageCount,
         .imageFormat = swapChainSurfaceFormat.format,
         .imageColorSpace = swapChainSurfaceFormat.colorSpace,
@@ -686,10 +580,8 @@ export class VulkanTutorial {
 
   GLFWwindow* window = nullptr;
 
-  vk::raii::Context context;
-  vk::raii::Instance instance = nullptr;
-  vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
-  vk::raii::SurfaceKHR surface = nullptr;
+  VulkanContext context;
+
   vk::raii::PhysicalDevice physicalDevice = nullptr;
   vk::raii::Device device = nullptr;
   uint32_t queueIndex = ~0;

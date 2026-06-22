@@ -5,7 +5,7 @@
 
 #if !defined(__INTELLISENSE__)
 import std;
-import vulkan_tutorial;
+import engine_vulkan;
 #else
 #include <iostream>
 #endif

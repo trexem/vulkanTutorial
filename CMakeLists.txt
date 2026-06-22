@@ -7,7 +7,7 @@ set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-project (VulkanTutorial)
+project (EngineVulkan)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")
@@ -107,7 +107,7 @@ file(GLOB_RECURSE SOURCE_FILES
     "${PROJECT_SOURCE_DIR}/src/*.cpp"
 )
 
-# Create the main game executable target using the project name (VulkanTutorial)
+# Create the main game executable target using the project name (EngineVulkan)
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 
 file(GLOB MODULE_FILES "${PROJECT_SOURCE_DIR}/src/*.cppm")
