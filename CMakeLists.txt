@@ -63,36 +63,6 @@ file(MAKE_DIRECTORY "${SHADERS_GEN_DIR}")
 # This list will collect every generated .spv file path
 set(ALL_GENERATED_SPV_FILES "")
 
-# ==========================================
-# 1. GLSL TRANSFORMATION LOOP (Vert / Frag)
-# ==========================================
-file(GLOB_RECURSE GLSLANG_SOURCE_FILES
-    "${SHADERS_SRC_DIR}/*.frag"
-    "${SHADERS_SRC_DIR}/*.vert"
-    "${SHADERS_SRC_DIR}/*.comp"
-)
-
-foreach(GLSL_FILE ${GLSLANG_SOURCE_FILES})
-    # Get just the filename (e.g., "shader.vert")
-    get_filename_component(FILE_NAME ${GLSL_FILE} NAME)
-    
-    # Define where the compiled .spv file should go in the build directory
-    set(OUTPUT_SPV "${SHADERS_GEN_DIR}/${FILE_NAME}.spv")
-    list(APPEND ALL_GENERATED_SPV_FILES "${OUTPUT_SPV}")
-
-    add_custom_command(
-        OUTPUT "${OUTPUT_SPV}"
-        COMMAND glslang::validator
-        ARGS --target-env vulkan1.3 "${GLSL_FILE}" -o "${OUTPUT_SPV}" --quiet
-        DEPENDS "${GLSL_FILE}"
-        COMMENT "Compiling GLSL Shader: ${FILE_NAME}"
-        VERBATIM
-    )
-endforeach()
-
-# ==========================================
-# 2. SLANG TRANSFORMATION LOOP (.slang)
-# ==========================================
 file(GLOB_RECURSE SLANG_SOURCE_FILES
     "${SHADERS_SRC_DIR}/*.slang"
 )
@@ -130,10 +100,6 @@ foreach(SLANG_FILE ${SLANG_SOURCE_FILES})
     )
 endforeach()
 
-# ==========================================
-# 3. THE MAGIC LINK: Custom Build Target
-# ==========================================
-# Create a master target holding all the collected SPV files
 add_custom_target(compile_shaders DEPENDS ${ALL_GENERATED_SPV_FILES})
 
 # Gather all C++ source files (.cpp)
@@ -165,4 +131,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 add_dependencies(${PROJECT_NAME} compile_shaders)
+target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS" )
+
 

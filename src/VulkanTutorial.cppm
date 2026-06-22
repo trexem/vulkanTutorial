@@ -50,8 +50,10 @@ export class VulkanTutorial {
   void initWindow() {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+    glfwSetWindowUserPointer(window, this);
+    glfwSetFramebufferSizeCallback(window, frameBufferResizeCallback);
   }
 
   void initVulkan() {
@@ -64,8 +66,13 @@ export class VulkanTutorial {
     createImageViews();
     createGraphicsPipeline();
     createCommandPool();
-    createCommandBuffer();
+    createCommandBuffers();
     createSyncObjects();
+  }
+
+  static void frameBufferResizeCallback(GLFWwindow* window, int width, int height) {
+    auto app = reinterpret_cast<VulkanTutorial*>(glfwGetWindowUserPointer(window));
+    app->frameBufferResized = true;
   }
 
   void createInstance() {
@@ -474,7 +481,8 @@ export class VulkanTutorial {
     commandPool = vk::raii::CommandPool(device, poolInfo);
   }
 
-  void createCommandBuffer() {
+  void createCommandBuffers() {
+    commandBuffers.clear();
     vk::CommandBufferAllocateInfo allocInfo{.commandPool = commandPool,
                                             .level = vk::CommandBufferLevel::ePrimary,
                                             .commandBufferCount = MAX_FRAMES_IN_FLIGHT};
@@ -584,11 +592,12 @@ export class VulkanTutorial {
     if (fenceResult != vk::Result::eSuccess) {
       throw std::runtime_error("failed to wait for fence");
     }
+    auto imageIndex = acquireNextFrameImage();
+    if (!imageIndex) return;
     device.resetFences(*inFlightFences[frameIndex]);
-    auto [result, imageIndex] = swapChain.acquireNextImage(
-        UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
+
     commandBuffers[frameIndex].reset();
-    recordCommandBuffer(imageIndex);
+    recordCommandBuffer(*imageIndex);
 
     vk::PipelineStageFlags waitDestinationStageMask(
         vk::PipelineStageFlagBits::eColorAttachmentOutput);
@@ -599,31 +608,76 @@ export class VulkanTutorial {
         .commandBufferCount = 1,
         .pCommandBuffers = &*commandBuffers[frameIndex],
         .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &*renderFinishedSemaphores[imageIndex]};
+        .pSignalSemaphores = &*renderFinishedSemaphores[*imageIndex]};
 
     graphicsQueue.submit(submitInfo, *inFlightFences[frameIndex]);
 
     vk::PresentInfoKHR presentInfoKHR{
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
+        .pWaitSemaphores = &*renderFinishedSemaphores[*imageIndex],
         .swapchainCount = 1,
         .pSwapchains = &*swapChain,
-        .pImageIndices = &imageIndex};
-    result = graphicsQueue.presentKHR(presentInfoKHR);
-    switch (result) {
-      case vk::Result::eSuccess:
-        break;
-      case vk::Result::eSuboptimalKHR:
-        std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
-        break;
-      default:
-        break;
-    }
+        .pImageIndices = &imageIndex.value()};
+
+    presentGraphicsQueue(presentInfoKHR);
 
     frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
   }
 
+  std::optional<uint32_t> acquireNextFrameImage() {
+    try {
+      auto [result, idx] = swapChain.acquireNextImage(
+          UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
+      if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
+        throw std::runtime_error("failed to acquire swap chain image!");
+      }
+      return idx;
+    } catch (vk::OutOfDateKHRError const&) {
+      std::cout << "errorOutOfDateKHR acquiring next Image!\n";
+      recreateSwapChain();
+      return std::nullopt;
+    }
+  }
+
+  void presentGraphicsQueue(const vk::PresentInfoKHR& presentInfo) {
+    try {
+      auto result = graphicsQueue.presentKHR(presentInfo);
+      if (result == vk::Result::eSuboptimalKHR || frameBufferResized) {
+        frameBufferResized = false;
+        recreateSwapChain();
+        std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
+      }
+
+    } catch (vk::OutOfDateKHRError const&) {
+      recreateSwapChain();
+    }
+  }
+
+  void recreateSwapChain() {
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(window, &width, &height);
+    while (width == 0 || height == 0) {
+      glfwGetFramebufferSize(window, &width, &height);
+      glfwWaitEvents();
+    }
+    device.waitIdle();
+
+    cleanupSwapChain();
+
+    createSwapChain();
+    createImageViews();
+
+    frameIndex = 0;
+  }
+
+  void cleanupSwapChain() {
+    swapChainImageViews.clear();
+    swapChain = nullptr;
+  }
+
   void cleanup() {
+    cleanupSwapChain();
+
     if (window) {
       glfwDestroyWindow(window);
     }
@@ -654,4 +708,5 @@ export class VulkanTutorial {
   std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
   std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
   std::vector<vk::raii::Fence> inFlightFences;
+  bool frameBufferResized = false;
 };
