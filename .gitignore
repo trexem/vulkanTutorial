@@ -17,6 +17,8 @@ compile_commands.json
 *~
 .netrwhist
 *.spv
-CMakeCache.txt 
+CMakeCache.txt
+.clang-format
+.clangd
 
 cmake_install.cmake
