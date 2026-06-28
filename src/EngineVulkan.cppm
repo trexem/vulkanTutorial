@@ -30,7 +30,7 @@ constexpr uint32_t HEIGHT = 1080;
 
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
-const std::vector<Vertex> vertices = {{{0.0f, -0.75f}, {1.0f, 1.0f, 1.0f}},
+const std::vector<Vertex> vertices = {{{0.0f, -0.75f}, {1.0f, 0.0f, 0.0f}},
                                       {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
                                       {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
 
@@ -68,25 +68,61 @@ export class VulkanTutorial {
     app->frameBufferResized = true;
   }
 
-  void createVertexBuffer() {
-    vk::BufferCreateInfo bufferInfo{.size = sizeof(vertices[0]) * vertices.size(),
-                                    .usage = vk::BufferUsageFlagBits::eVertexBuffer,
-                                    .sharingMode = vk::SharingMode::eExclusive};
-    vertexBuffer = vk::raii::Buffer(device.device, bufferInfo);
-
-    vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(
+      vk::DeviceSize size, vk::BufferUsageFlags usage,
+      vk::MemoryPropertyFlags properties) {
+    std::array<uint32_t, 2> queueFamilyIndices = {device.graphicsQueueIndex,
+                                                  device.transferQueueIndex};
+    vk::BufferCreateInfo bufferInfo{.size = size,
+                                    .usage = usage,
+                                    .sharingMode = vk::SharingMode::eConcurrent,
+                                    .queueFamilyIndexCount = 2,
+                                    .pQueueFamilyIndices = queueFamilyIndices.data()};
+    vk::raii::Buffer buffer = vk::raii::Buffer(device.device, bufferInfo);
+    vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
     vk::MemoryAllocateInfo memAllocateInfo{
         .allocationSize = memRequirements.size,
-        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-                                          vk::MemoryPropertyFlagBits::eHostVisible |
-                                              vk::MemoryPropertyFlagBits::eHostCoherent)};
+        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
 
-    vertexBufferMemory = vk::raii::DeviceMemory(device.device, memAllocateInfo);
+    vk::raii::DeviceMemory bufferMemory =
+        vk::raii::DeviceMemory(device.device, memAllocateInfo);
+    buffer.bindMemory(*bufferMemory, 0);
+    return {std::move(buffer), std::move(bufferMemory)};
+  }
 
-    vertexBuffer.bindMemory(*vertexBufferMemory, 0);
-    void* data = vertexBufferMemory.mapMemory(0, bufferInfo.size);
-    std::memcpy(data, vertices.data(), bufferInfo.size);
-    vertexBufferMemory.unmapMemory();
+  void createVertexBuffer() {
+    vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+    auto [stagingBuffer, stagingBufferMemory] =
+        createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                     vk::MemoryPropertyFlagBits::eHostVisible |
+                         vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+    std::memcpy(dataStaging, vertices.data(), bufferSize);
+    stagingBufferMemory.unmapMemory();
+
+    std::tie(vertexBuffer, vertexBufferMemory) = createBuffer(
+        bufferSize,
+        vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+        vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+  }
+
+  void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer,
+                  vk::DeviceSize size) {
+    vk::CommandBufferAllocateInfo allocInfo{.commandPool = device.transferCommandPool,
+                                            .level = vk::CommandBufferLevel::ePrimary,
+                                            .commandBufferCount = 1};
+    vk::raii::CommandBuffer commandCopyBuffer =
+        std::move(device.device.allocateCommandBuffers(allocInfo).front());
+    commandCopyBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+    commandCopyBuffer.end();
+    device.transferQueue.submit(
+        vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer},
+        nullptr);
+    device.transferQueue.waitIdle();
   }
 
   uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
@@ -103,7 +139,7 @@ export class VulkanTutorial {
 
   void createCommandBuffers() {
     commandBuffers.clear();
-    vk::CommandBufferAllocateInfo allocInfo{.commandPool = device.commandPool,
+    vk::CommandBufferAllocateInfo allocInfo{.commandPool = device.graphicsCommandPool,
                                             .level = vk::CommandBufferLevel::ePrimary,
                                             .commandBufferCount = MAX_FRAMES_IN_FLIGHT};
     commandBuffers = vk::raii::CommandBuffers(device.device, allocInfo);
@@ -292,6 +328,15 @@ export class VulkanTutorial {
   }
 
   void cleanup() {
+    inFlightFences.clear();
+    renderFinishedSemaphores.clear();
+    presentCompleteSemaphores.clear();
+    commandBuffers.clear();
+
+    vertexBuffer = nullptr;
+    vertexBufferMemory = nullptr;
+
+    pipeline = {};
     swapchain.cleanup();
 
     device = {};

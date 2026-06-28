@@ -26,13 +26,16 @@ export struct VulkanDevice {
   vk::raii::PhysicalDevice physicalDevice = nullptr;
   vk::raii::Device device = nullptr;
   vk::raii::Queue graphicsQueue = nullptr;
-  vk::raii::CommandPool commandPool = nullptr;
-  uint32_t queueIndex = ~0;
+  vk::raii::Queue transferQueue = nullptr;
+  vk::raii::CommandPool graphicsCommandPool = nullptr;
+  vk::raii::CommandPool transferCommandPool = nullptr;
+  uint32_t graphicsQueueIndex = ~0;
+  uint32_t transferQueueIndex = ~0;
 
   void init(const VulkanContext& context) {
     pickPhysicalDevice(context);
     createLogicalDevice(context);
-    createCommandPool();
+    createCommandPools();
   }
 
  private:
@@ -92,15 +95,26 @@ export struct VulkanDevice {
         physicalDevice.getQueueFamilyProperties();
 
     for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++) {
+      if (transferQueueIndex != ~0 && graphicsQueueIndex != ~0) break;
+      if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eTransfer) &&
+          !(queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics)) {
+        transferQueueIndex = qfpIndex;
+        continue;
+      }
       if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
           physicalDevice.getSurfaceSupportKHR(qfpIndex, *context.surface)) {
-        queueIndex = qfpIndex;
-        break;
+        graphicsQueueIndex = qfpIndex;
+        continue;
       }
     }
-    if (queueIndex == ~0) {
+
+    if (graphicsQueueIndex == ~0) {
       throw std::runtime_error(
-          "Could not find a queue for graphics and present -> terminating");
+          "Could not find a graphics queue for graphics and present -> terminating");
+    }
+    if (transferQueueIndex == ~0) {
+      throw std::runtime_error(
+          "Could not find a transfer queue for different than graphics");
     }
     float queuePriority = 0.5f;
 
@@ -118,25 +132,35 @@ export struct VulkanDevice {
                  true}  // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
         };
 
-    vk::DeviceQueueCreateInfo deviceQueueCreateInfo{.queueFamilyIndex = queueIndex,
-                                                    .queueCount = 1,
-                                                    .pQueuePriorities = &queuePriority};
+    std::vector<vk::DeviceQueueCreateInfo> deviceQueueCreateInfos{
+        {.queueFamilyIndex = graphicsQueueIndex,
+         .queueCount = 1,
+         .pQueuePriorities = &queuePriority},
+        {.queueFamilyIndex = transferQueueIndex,
+         .queueCount = 1,
+         .pQueuePriorities = &queuePriority}};
 
     vk::DeviceCreateInfo deviceCreateInfo{
         .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &deviceQueueCreateInfo,
+        .queueCreateInfoCount = 2,
+        .pQueueCreateInfos = deviceQueueCreateInfos.data(),
         .enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtension.size()),
         .ppEnabledExtensionNames = requiredDeviceExtension.data()};
 
     device = vk::raii::Device(physicalDevice, deviceCreateInfo);
-    graphicsQueue = vk::raii::Queue(device, queueIndex, 0);
+    graphicsQueue = vk::raii::Queue(device, graphicsQueueIndex, 0);
+    transferQueue = vk::raii::Queue(device, transferQueueIndex, 0);
   }
 
-  void createCommandPool() {
-    vk::CommandPoolCreateInfo poolInfo{
+  void createCommandPools() {
+    vk::CommandPoolCreateInfo graphicsPoolInfo{
         .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-        .queueFamilyIndex = queueIndex};
-    commandPool = vk::raii::CommandPool(device, poolInfo);
+        .queueFamilyIndex = graphicsQueueIndex};
+    graphicsCommandPool = vk::raii::CommandPool(device, graphicsPoolInfo);
+    vk::CommandPoolCreateInfo transferPoolInfo{
+        .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer |
+                 vk::CommandPoolCreateFlagBits::eTransient,
+        .queueFamilyIndex = transferQueueIndex};
+    transferCommandPool = vk::raii::CommandPool(device, transferPoolInfo);
   }
 };
