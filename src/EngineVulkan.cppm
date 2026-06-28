@@ -30,6 +30,10 @@ constexpr uint32_t HEIGHT = 1080;
 
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
+const std::vector<Vertex> vertices = {{{0.0f, -0.75f}, {1.0f, 1.0f, 1.0f}},
+                                      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+                                      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+
 export class VulkanTutorial {
  public:
   void run() {
@@ -54,6 +58,7 @@ export class VulkanTutorial {
     device.init(context);
     swapchain.init(context, device, window);
     pipeline.init(device, swapchain);
+    createVertexBuffer();
     createCommandBuffers();
     createSyncObjects();
   }
@@ -61,6 +66,39 @@ export class VulkanTutorial {
   static void frameBufferResizeCallback(GLFWwindow* window, int width, int height) {
     auto app = reinterpret_cast<VulkanTutorial*>(glfwGetWindowUserPointer(window));
     app->frameBufferResized = true;
+  }
+
+  void createVertexBuffer() {
+    vk::BufferCreateInfo bufferInfo{.size = sizeof(vertices[0]) * vertices.size(),
+                                    .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+                                    .sharingMode = vk::SharingMode::eExclusive};
+    vertexBuffer = vk::raii::Buffer(device.device, bufferInfo);
+
+    vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();
+    vk::MemoryAllocateInfo memAllocateInfo{
+        .allocationSize = memRequirements.size,
+        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
+                                          vk::MemoryPropertyFlagBits::eHostVisible |
+                                              vk::MemoryPropertyFlagBits::eHostCoherent)};
+
+    vertexBufferMemory = vk::raii::DeviceMemory(device.device, memAllocateInfo);
+
+    vertexBuffer.bindMemory(*vertexBufferMemory, 0);
+    void* data = vertexBufferMemory.mapMemory(0, bufferInfo.size);
+    std::memcpy(data, vertices.data(), bufferInfo.size);
+    vertexBufferMemory.unmapMemory();
+  }
+
+  uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
+    vk::PhysicalDeviceMemoryProperties memProperties =
+        device.physicalDevice.getMemoryProperties();
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+      if ((typeFilter & (1 << i)) &&
+          (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+        return i;
+      }
+    }
+    throw std::runtime_error("failed to find suitable memory type");
   }
 
   void createCommandBuffers() {
@@ -107,7 +145,9 @@ export class VulkanTutorial {
     vk::Rect2D scissor{vk::Offset2D{0, 0}, swapchain.swapChainExtent};
     commandBuffer.setScissor(0, scissor);
 
-    commandBuffer.draw(3, 1, 0, 0);
+    commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
+
+    commandBuffer.draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
     commandBuffer.endRendering();
 
@@ -271,7 +311,8 @@ export class VulkanTutorial {
   VulkanPipeline pipeline;
 
   uint32_t frameIndex = 0;
-
+  vk::raii::Buffer vertexBuffer = nullptr;
+  vk::raii::DeviceMemory vertexBufferMemory = nullptr;
   std::vector<vk::raii::CommandBuffer> commandBuffers;
 
   std::vector<vk::raii::Semaphore> presentCompleteSemaphores;

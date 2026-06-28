@@ -1,5 +1,7 @@
 module;
 
+#include <glm/glm.hpp>
+
 // Block for my LSP
 #if defined(__clang__)
 #include <cstdint>
@@ -18,6 +20,28 @@ export import :swapchain;
 import vulkan;
 import std;
 #endif
+
+struct Vertex {
+  glm::vec2 pos;
+  glm::vec3 color;
+
+  static vk::VertexInputBindingDescription getBindingDescription() {
+    return {.binding = 0,
+            .stride = sizeof(Vertex),
+            .inputRate = vk::VertexInputRate::eVertex};
+  }
+
+  static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDesctriptions() {
+    return {{{.location = 0,
+              .binding = 0,
+              .format = vk::Format::eR32G32Sfloat,
+              .offset = offsetof(Vertex, pos)},
+             {.location = 1,
+              .binding = 0,
+              .format = vk::Format::eR32G32B32Sfloat,
+              .offset = offsetof(Vertex, color)}}};
+  }
+};
 
 export struct VulkanPipeline {
   vk::raii::PipelineLayout pipelineLayout = nullptr;
@@ -49,7 +73,14 @@ export struct VulkanPipeline {
                                                         fragShaderStageInfo};
 
     // Fixed functions
-    vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
+    auto bindingDescription = Vertex::getBindingDescription();
+    auto attributeDescriptions = Vertex::getAttributeDesctriptions();
+    vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &bindingDescription,
+        .vertexAttributeDescriptionCount =
+            static_cast<uint32_t>(attributeDescriptions.size()),
+        .pVertexAttributeDescriptions = attributeDescriptions.data()};
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
         .topology = vk::PrimitiveTopology::eTriangleList};
