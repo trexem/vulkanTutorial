@@ -30,9 +30,11 @@ constexpr uint32_t HEIGHT = 1080;
 
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
-const std::vector<Vertex> vertices = {{{0.0f, -0.75f}, {1.0f, 0.0f, 0.0f}},
-                                      {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-                                      {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
+const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
 export class VulkanTutorial {
  public:
@@ -59,6 +61,7 @@ export class VulkanTutorial {
     swapchain.init(context, device, window);
     pipeline.init(device, swapchain);
     createVertexBuffer();
+    createIndexBuffer();
     createCommandBuffers();
     createSyncObjects();
   }
@@ -107,6 +110,25 @@ export class VulkanTutorial {
         vk::MemoryPropertyFlagBits::eDeviceLocal);
 
     copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+  }
+
+  void createIndexBuffer() {
+    vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+    auto [stagingBuffer, stagingBufferMemory] =
+        createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                     vk::MemoryPropertyFlagBits::eHostVisible |
+                         vk::MemoryPropertyFlagBits::eHostCoherent);
+    void* data = stagingBufferMemory.mapMemory(0, bufferSize);
+    std::memcpy(data, indices.data(), (size_t)bufferSize);
+    stagingBufferMemory.unmapMemory();
+
+    std::tie(indexBuffer, indexBufferMemory) = createBuffer(
+        bufferSize,
+        vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+        vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    copyBuffer(stagingBuffer, indexBuffer, bufferSize);
   }
 
   void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer,
@@ -182,8 +204,10 @@ export class VulkanTutorial {
     commandBuffer.setScissor(0, scissor);
 
     commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
+    commandBuffer.bindIndexBuffer(
+        *indexBuffer, 0, vk::IndexTypeValue<decltype(indices)::value_type>::value);
 
-    commandBuffer.draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+    commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
     commandBuffer.endRendering();
 
@@ -335,6 +359,8 @@ export class VulkanTutorial {
 
     vertexBuffer = nullptr;
     vertexBufferMemory = nullptr;
+    indexBuffer = nullptr;
+    indexBufferMemory = nullptr;
 
     pipeline = {};
     swapchain.cleanup();
@@ -358,6 +384,8 @@ export class VulkanTutorial {
   uint32_t frameIndex = 0;
   vk::raii::Buffer vertexBuffer = nullptr;
   vk::raii::DeviceMemory vertexBufferMemory = nullptr;
+  vk::raii::Buffer indexBuffer = nullptr;
+  vk::raii::DeviceMemory indexBufferMemory = nullptr;
   std::vector<vk::raii::CommandBuffer> commandBuffers;
 
   std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
