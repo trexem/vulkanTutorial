@@ -86,7 +86,7 @@ export class VulkanTutorial {
     vertexBuffer = VulkanBufferFactory::create(
         device, bufferSize,
         vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+        VMA_MEMORY_USAGE_AUTO);
 
     copyBuffer(stagingBuffer.buffer, vertexBuffer.buffer, bufferSize);
   }
@@ -105,7 +105,7 @@ export class VulkanTutorial {
     indexBuffer = VulkanBufferFactory::create(
         device, bufferSize,
         vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+        VMA_MEMORY_USAGE_AUTO);
 
     copyBuffer(stagingBuffer.buffer, indexBuffer.buffer, bufferSize);
   }

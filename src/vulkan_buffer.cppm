@@ -66,11 +66,18 @@ export class VulkanBufferFactory {
                                     .sharingMode = vk::SharingMode::eConcurrent,
                                     .queueFamilyIndexCount = 2,
                                     .pQueueFamilyIndices = queueFamilyIndices.data()};
-    VmaAllocationCreateInfo allocCreateInfo{
-        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
-                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-        .usage = vmaUsage,
-        .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT};
+    VmaAllocationCreateInfo allocCreateInfo{.usage = vmaUsage};
+    if (vmaUsage == VMA_MEMORY_USAGE_AUTO_PREFER_HOST ||
+        vmaUsage == VMA_MEMORY_USAGE_AUTO) {
+      allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+      if (usage & vk::BufferUsageFlagBits::eTransferSrc) {
+        // Staging Buffer
+        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+      } else {
+        // Vertex or Index buffer
+        allocCreateInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+      }
+    }
     VkBuffer rawBuffer;
     if (vmaCreateBuffer(device.allocator,
                         reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo),
