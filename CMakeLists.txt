@@ -119,6 +119,7 @@ target_sources(${PROJECT_NAME} PUBLIC
 
 # Add header files
 target_include_directories(${PROJECT_NAME} PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_include_directories(${PROJECT_NAME} PRIVATE "${PROJECT_SOURCE_DIR}/vendored/VulkanMemoryAllocator/")
 
 # Add all libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE

@@ -1,5 +1,6 @@
 module;
 
+#include <vk_mem_alloc.h>
 #include <vulkan/vulkan_core.h>
 // vulkan_core must go before glfw
 #include <GLFW/glfw3.h>
@@ -19,6 +20,7 @@ export import :context;
 export import :device;
 export import :swapchain;
 export import :pipeline;
+export import :buffer;
 
 #if !defined(__clang__)
 import vulkan;
@@ -71,75 +73,51 @@ export class VulkanTutorial {
     app->frameBufferResized = true;
   }
 
-  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(
-      vk::DeviceSize size, vk::BufferUsageFlags usage,
-      vk::MemoryPropertyFlags properties) {
-    std::array<uint32_t, 2> queueFamilyIndices = {device.graphicsQueueIndex,
-                                                  device.transferQueueIndex};
-    vk::BufferCreateInfo bufferInfo{.size = size,
-                                    .usage = usage,
-                                    .sharingMode = vk::SharingMode::eConcurrent,
-                                    .queueFamilyIndexCount = 2,
-                                    .pQueueFamilyIndices = queueFamilyIndices.data()};
-    vk::raii::Buffer buffer = vk::raii::Buffer(device.device, bufferInfo);
-    vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
-    vk::MemoryAllocateInfo memAllocateInfo{
-        .allocationSize = memRequirements.size,
-        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
-
-    vk::raii::DeviceMemory bufferMemory =
-        vk::raii::DeviceMemory(device.device, memAllocateInfo);
-    buffer.bindMemory(*bufferMemory, 0);
-    return {std::move(buffer), std::move(bufferMemory)};
-  }
-
   void createVertexBuffer() {
     vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-    auto [stagingBuffer, stagingBufferMemory] =
-        createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                     vk::MemoryPropertyFlagBits::eHostVisible |
-                         vk::MemoryPropertyFlagBits::eHostCoherent);
+    VulkanBuffer stagingBuffer = VulkanBufferFactory::create(
+        device, bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+        VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
+    void* data = nullptr;
+    vmaMapMemory(device.allocator, stagingBuffer.allocation, &data);
+    std::memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
+    vmaUnmapMemory(device.allocator, stagingBuffer.allocation);
 
-    void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-    std::memcpy(dataStaging, vertices.data(), bufferSize);
-    stagingBufferMemory.unmapMemory();
-
-    std::tie(vertexBuffer, vertexBufferMemory) = createBuffer(
-        bufferSize,
+    vertexBuffer = VulkanBufferFactory::create(
+        device, bufferSize,
         vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal);
+        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
 
-    copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+    copyBuffer(stagingBuffer.buffer, vertexBuffer.buffer, bufferSize);
   }
 
   void createIndexBuffer() {
     vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+    VulkanBuffer stagingBuffer = VulkanBufferFactory::create(
+        device, bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+        VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
 
-    auto [stagingBuffer, stagingBufferMemory] =
-        createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                     vk::MemoryPropertyFlagBits::eHostVisible |
-                         vk::MemoryPropertyFlagBits::eHostCoherent);
-    void* data = stagingBufferMemory.mapMemory(0, bufferSize);
-    std::memcpy(data, indices.data(), (size_t)bufferSize);
-    stagingBufferMemory.unmapMemory();
+    void* data = nullptr;
+    vmaMapMemory(device.allocator, stagingBuffer.allocation, &data);
+    std::memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
+    vmaUnmapMemory(device.allocator, stagingBuffer.allocation);
 
-    std::tie(indexBuffer, indexBufferMemory) = createBuffer(
-        bufferSize,
+    indexBuffer = VulkanBufferFactory::create(
+        device, bufferSize,
         vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal);
+        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
 
-    copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+    copyBuffer(stagingBuffer.buffer, indexBuffer.buffer, bufferSize);
   }
 
-  void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer,
-                  vk::DeviceSize size) {
+  void copyBuffer(vk::Buffer srcBuffer, vk::Buffer dstBuffer, vk::DeviceSize size) {
     vk::CommandBufferAllocateInfo allocInfo{.commandPool = device.transferCommandPool,
                                             .level = vk::CommandBufferLevel::ePrimary,
                                             .commandBufferCount = 1};
     vk::raii::CommandBuffer commandCopyBuffer =
         std::move(device.device.allocateCommandBuffers(allocInfo).front());
     commandCopyBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-    commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+    commandCopyBuffer.copyBuffer(srcBuffer, dstBuffer, vk::BufferCopy(0, 0, size));
     commandCopyBuffer.end();
     device.transferQueue.submit(
         vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer},
@@ -203,9 +181,9 @@ export class VulkanTutorial {
     vk::Rect2D scissor{vk::Offset2D{0, 0}, swapchain.swapChainExtent};
     commandBuffer.setScissor(0, scissor);
 
-    commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
+    commandBuffer.bindVertexBuffers(0, vertexBuffer.buffer, {0});
     commandBuffer.bindIndexBuffer(
-        *indexBuffer, 0, vk::IndexTypeValue<decltype(indices)::value_type>::value);
+        indexBuffer.buffer, 0, vk::IndexTypeValue<decltype(indices)::value_type>::value);
 
     commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
@@ -357,14 +335,14 @@ export class VulkanTutorial {
     presentCompleteSemaphores.clear();
     commandBuffers.clear();
 
-    vertexBuffer = nullptr;
-    vertexBufferMemory = nullptr;
-    indexBuffer = nullptr;
-    indexBufferMemory = nullptr;
+    vertexBuffer = {};
+    indexBuffer = {};
 
     pipeline = {};
     swapchain.cleanup();
 
+    vmaDestroyAllocator(device.allocator);
+    device.allocator = nullptr;
     device = {};
     context = {};
 
@@ -380,12 +358,9 @@ export class VulkanTutorial {
   VulkanDevice device;
   VulkanSwapchain swapchain;
   VulkanPipeline pipeline;
-
+  VulkanBuffer vertexBuffer;
+  VulkanBuffer indexBuffer;
   uint32_t frameIndex = 0;
-  vk::raii::Buffer vertexBuffer = nullptr;
-  vk::raii::DeviceMemory vertexBufferMemory = nullptr;
-  vk::raii::Buffer indexBuffer = nullptr;
-  vk::raii::DeviceMemory indexBufferMemory = nullptr;
   std::vector<vk::raii::CommandBuffer> commandBuffers;
 
   std::vector<vk::raii::Semaphore> presentCompleteSemaphores;

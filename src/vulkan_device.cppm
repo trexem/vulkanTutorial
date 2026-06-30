@@ -1,5 +1,6 @@
 module;
 
+#include <vk_mem_alloc.h>
 #include <vulkan/vulkan_core.h>
 // vulkan_core must go before glfw
 #include <GLFW/glfw3.h>
@@ -31,11 +32,13 @@ export struct VulkanDevice {
   vk::raii::CommandPool transferCommandPool = nullptr;
   uint32_t graphicsQueueIndex = ~0;
   uint32_t transferQueueIndex = ~0;
+  VmaAllocator allocator = nullptr;
 
   void init(const VulkanContext& context) {
     pickPhysicalDevice(context);
     createLogicalDevice(context);
     createCommandPools();
+    initVma(context);
   }
 
  private:
@@ -162,5 +165,19 @@ export struct VulkanDevice {
                  vk::CommandPoolCreateFlagBits::eTransient,
         .queueFamilyIndex = transferQueueIndex};
     transferCommandPool = vk::raii::CommandPool(device, transferPoolInfo);
+  }
+
+  void initVma(const VulkanContext& context) {
+    VmaVulkanFunctions vulkanFunctions{
+        .vkGetInstanceProcAddr = context.instance.getDispatcher()->vkGetInstanceProcAddr,
+        .vkGetDeviceProcAddr = device.getDispatcher()->vkGetDeviceProcAddr};
+
+    VmaAllocatorCreateInfo allocatorCreateInfo{.physicalDevice = *physicalDevice,
+                                               .device = *device,
+                                               .pVulkanFunctions = &vulkanFunctions,
+                                               .instance = *context.instance,
+                                               .vulkanApiVersion = VK_API_VERSION_1_4};
+
+    vmaCreateAllocator(&allocatorCreateInfo, &allocator);
   }
 };
