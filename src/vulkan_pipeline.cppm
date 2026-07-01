@@ -44,14 +44,27 @@ struct Vertex {
 };
 
 export struct VulkanPipeline {
+  vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
   vk::raii::PipelineLayout pipelineLayout = nullptr;
   vk::raii::Pipeline graphicsPipeline = nullptr;
 
   void init(const VulkanDevice& device, const VulkanSwapchain& swapchain) {
+    createDescriptorSetLayout(device);
     createGraphicsPipeline(device, swapchain);
   }
 
  private:
+  void createDescriptorSetLayout(const VulkanDevice& device) {
+    vk::DescriptorSetLayoutBinding uboLayoutBinding{
+        .binding = 0,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eVertex};
+    vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1,
+                                                 .pBindings = &uboLayoutBinding};
+    descriptorSetLayout = vk::raii::DescriptorSetLayout(device.device, layoutInfo);
+  }
+
   void createGraphicsPipeline(const VulkanDevice& device,
                               const VulkanSwapchain& swapchain) {
     // Shader stages
@@ -100,7 +113,7 @@ export struct VulkanPipeline {
         .rasterizerDiscardEnable = vk::False,
         .polygonMode = vk::PolygonMode::eFill,
         .cullMode = vk::CullModeFlagBits::eBack,
-        .frontFace = vk::FrontFace::eClockwise,
+        .frontFace = vk::FrontFace::eCounterClockwise,
         .depthBiasEnable = vk::False,
         .lineWidth = 1.0f};
 
@@ -126,7 +139,8 @@ export struct VulkanPipeline {
         .pAttachments = &colorBlendAttachment};
 
     // Pipeline layout
-    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 0,
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 1,
+                                                    .pSetLayouts = &*descriptorSetLayout,
                                                     .pushConstantRangeCount = 0};
     pipelineLayout = vk::raii::PipelineLayout(device.device, pipelineLayoutInfo);
 

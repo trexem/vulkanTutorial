@@ -73,6 +73,9 @@ export class VulkanBufferFactory {
       if (usage & vk::BufferUsageFlagBits::eTransferSrc) {
         // Staging Buffer
         allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+      } else if (usage & vk::BufferUsageFlagBits::eUniformBuffer) {
+        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT;
       } else {
         // Vertex or Index buffer
         allocCreateInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;

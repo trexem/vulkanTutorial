@@ -6,9 +6,12 @@ module;
 #include <GLFW/glfw3.h>
 
 #include <cassert>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 // Block for my LSP
 #if defined(__clang__)
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <vulkan/vulkan_raii.hpp>
@@ -38,6 +41,12 @@ const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
                                       {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
 const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
+struct UniformBufferObject {
+  alignas(16) glm::mat4 model;
+  alignas(16) glm::mat4 view;
+  alignas(16) glm::mat4 proj;
+};
+
 export class VulkanTutorial {
  public:
   void run() {
@@ -64,6 +73,9 @@ export class VulkanTutorial {
     pipeline.init(device, swapchain);
     createVertexBuffer();
     createIndexBuffer();
+    createUniformBuffers();
+    createDescriptorPool();
+    createDescriptorSets();
     createCommandBuffers();
     createSyncObjects();
   }
@@ -108,6 +120,51 @@ export class VulkanTutorial {
         VMA_MEMORY_USAGE_AUTO);
 
     copyBuffer(stagingBuffer.buffer, indexBuffer.buffer, bufferSize);
+  }
+
+  void createUniformBuffers() {
+    vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      VulkanBuffer buffer = VulkanBufferFactory::create(
+          device, bufferSize, vk::BufferUsageFlagBits::eUniformBuffer,
+          VMA_MEMORY_USAGE_AUTO);
+      uniformBuffersMapped.emplace_back(buffer.allocInfo.pMappedData);
+      uniformBuffers.emplace_back(std::move(buffer));
+    }
+  }
+
+  void createDescriptorPool() {
+    vk::DescriptorPoolSize poolSize{.type = vk::DescriptorType::eUniformBuffer,
+                                    .descriptorCount = MAX_FRAMES_IN_FLIGHT};
+    vk::DescriptorPoolCreateInfo poolInfo{
+        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+        .maxSets = MAX_FRAMES_IN_FLIGHT,
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize};
+    descriptorPool = vk::raii::DescriptorPool(device.device, poolInfo);
+  }
+
+  void createDescriptorSets() {
+    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+                                                 *pipeline.descriptorSetLayout);
+    vk::DescriptorSetAllocateInfo allocInfo{
+        .descriptorPool = descriptorPool,
+        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+        .pSetLayouts = layouts.data()};
+    descriptorSets = device.device.allocateDescriptorSets(allocInfo);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      vk::DescriptorBufferInfo bufferInfo{.buffer = uniformBuffers[i].buffer,
+                                          .offset = 0,
+                                          .range = sizeof(UniformBufferObject)};
+      vk::WriteDescriptorSet descriptorWrite{
+          .dstSet = *descriptorSets[i],
+          .dstBinding = 0,
+          .dstArrayElement = 0,
+          .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eUniformBuffer,
+          .pBufferInfo = &bufferInfo};
+      device.device.updateDescriptorSets(descriptorWrite, {});
+    }
   }
 
   void copyBuffer(vk::Buffer srcBuffer, vk::Buffer dstBuffer, vk::DeviceSize size) {
@@ -184,6 +241,9 @@ export class VulkanTutorial {
     commandBuffer.bindVertexBuffers(0, vertexBuffer.buffer, {0});
     commandBuffer.bindIndexBuffer(
         indexBuffer.buffer, 0, vk::IndexTypeValue<decltype(indices)::value_type>::value);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                     pipeline.pipelineLayout, 0,
+                                     *descriptorSets[frameIndex], nullptr);
 
     commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
@@ -256,6 +316,8 @@ export class VulkanTutorial {
     }
     auto imageIndex = acquireNextFrameImage();
     if (!imageIndex) return;
+    updateUniformBuffer(frameIndex);
+
     device.device.resetFences(*inFlightFences[frameIndex]);
 
     commandBuffers[frameIndex].reset();
@@ -301,6 +363,27 @@ export class VulkanTutorial {
     }
   }
 
+  void updateUniformBuffer(uint32_t currentImage) {
+    static auto startTime = std::chrono::high_resolution_clock::now();
+
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime -
+                                                                            startTime)
+                     .count();
+
+    UniformBufferObject ubo{};
+    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
+                            glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.view = lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+                      glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.proj = glm::perspective(glm::radians(45.0f),
+                                static_cast<float>(swapchain.swapChainExtent.width) /
+                                    static_cast<float>(swapchain.swapChainExtent.height),
+                                0.1f, 10.0f);
+    ubo.proj[1][1] *= -1;
+    std::memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+  }
+
   void presentGraphicsQueue(const vk::PresentInfoKHR& presentInfo) {
     try {
       auto result = device.graphicsQueue.presentKHR(presentInfo);
@@ -338,9 +421,13 @@ export class VulkanTutorial {
     vertexBuffer = {};
     indexBuffer = {};
 
+    uniformBuffers.clear();
+    uniformBuffersMapped.clear();
+
     pipeline = {};
     swapchain.cleanup();
-
+    descriptorSets.clear();
+    descriptorPool = nullptr;
     vmaDestroyAllocator(device.allocator);
     device.allocator = nullptr;
     device = {};
@@ -360,6 +447,10 @@ export class VulkanTutorial {
   VulkanPipeline pipeline;
   VulkanBuffer vertexBuffer;
   VulkanBuffer indexBuffer;
+  std::vector<VulkanBuffer> uniformBuffers;
+  std::vector<void*> uniformBuffersMapped;
+  vk::raii::DescriptorPool descriptorPool = nullptr;
+  std::vector<vk::raii::DescriptorSet> descriptorSets;
   uint32_t frameIndex = 0;
   std::vector<vk::raii::CommandBuffer> commandBuffers;
 
