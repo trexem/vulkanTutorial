@@ -30,6 +30,7 @@ export struct VulkanDevice {
   vk::raii::Queue transferQueue = nullptr;
   vk::raii::CommandPool graphicsCommandPool = nullptr;
   vk::raii::CommandPool transferCommandPool = nullptr;
+  vk::Format depthFormat = vk::Format::eUndefined;
   uint32_t graphicsQueueIndex = ~0;
   uint32_t transferQueueIndex = ~0;
   VmaAllocator allocator = nullptr;
@@ -39,6 +40,7 @@ export struct VulkanDevice {
     createLogicalDevice(context);
     createCommandPools();
     initVma(context);
+    depthFormat = findDepthFormat();
   }
 
  private:
@@ -180,5 +182,27 @@ export struct VulkanDevice {
                                                .vulkanApiVersion = VK_API_VERSION_1_4};
 
     vmaCreateAllocator(&allocatorCreateInfo, &allocator);
+  }
+
+  vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates,
+                                 vk::ImageTiling tiling,
+                                 vk::FormatFeatureFlags features) {
+    for (const auto format : candidates) {
+      vk::FormatProperties props = physicalDevice.getFormatProperties(format);
+      if ((tiling == vk::ImageTiling::eLinear &&
+           (props.linearTilingFeatures & features) == features) ||
+          tiling == vk::ImageTiling::eOptimal &&
+              (props.optimalTilingFeatures & features) == features) {
+        return format;
+      }
+    }
+    throw std::runtime_error("failed to find supported format!");
+  }
+
+  vk::Format findDepthFormat() {
+    return findSupportedFormat({vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint,
+                                vk::Format::eD24UnormS8Uint},
+                               vk::ImageTiling::eOptimal,
+                               vk::FormatFeatureFlagBits::eDepthStencilAttachment);
   }
 };

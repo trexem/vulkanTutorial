@@ -6,6 +6,7 @@ module;
 #include <GLFW/glfw3.h>
 
 #include <cassert>
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -39,11 +40,18 @@ constexpr uint32_t HEIGHT = 1080;
 
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
-const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
-const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
+const std::vector<Vertex> vertices = {
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+
+    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
+
+const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4};
 
 struct UniformBufferObject {
   alignas(16) glm::mat4 model;
@@ -75,6 +83,7 @@ export class VulkanTutorial {
     device.init(context);
     swapchain.init(context, device, window);
     pipeline.init(device, swapchain);
+    createDepthResources();
     createTextureImage();
     createTextureImageView();
     createTextureSampler();
@@ -90,6 +99,16 @@ export class VulkanTutorial {
   static void frameBufferResizeCallback(GLFWwindow* window, int width, int height) {
     auto app = reinterpret_cast<VulkanTutorial*>(glfwGetWindowUserPointer(window));
     app->frameBufferResized = true;
+  }
+
+  void createDepthResources() {
+    vk::Format depthFormat = device.depthFormat;
+    depthImage = VulkanImageFactory::create(
+        device, swapchain.swapChainExtent.width, swapchain.swapChainExtent.height,
+        depthFormat, vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eDepthStencilAttachment, VMA_MEMORY_USAGE_AUTO);
+    depthImageView =
+        createImageView(depthImage.image, depthFormat, vk::ImageAspectFlagBits::eDepth);
   }
 
   void createTextureImage() {
@@ -112,7 +131,7 @@ export class VulkanTutorial {
     stbi_image_free(pixels);
 
     textureImage = VulkanImageFactory::create(
-        device, texWidth, texHeight, vk::Format::eR8G8B8A8Srgb,
+        device, texWidth, texHeight, vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
         VMA_MEMORY_USAGE_AUTO);
 
@@ -179,19 +198,20 @@ export class VulkanTutorial {
   }
 
   void createTextureImageView() {
-    textureImageView = createImageView(textureImage.image, vk::Format::eR8G8B8A8Srgb);
+    textureImageView = createImageView(textureImage.image, vk::Format::eR8G8B8A8Srgb,
+                                       vk::ImageAspectFlagBits::eColor);
   }
 
-  vk::raii::ImageView createImageView(vk::Image const& image, vk::Format format) {
-    vk::ImageViewCreateInfo viewInfo{
-        .image = image,
-        .viewType = vk::ImageViewType::e2D,
-        .format = format,
-        .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
-                             .baseMipLevel = 0,
-                             .levelCount = 1,
-                             .baseArrayLayer = 0,
-                             .layerCount = 1}};
+  vk::raii::ImageView createImageView(vk::Image const& image, vk::Format format,
+                                      vk::ImageAspectFlags aspectFlags) {
+    vk::ImageViewCreateInfo viewInfo{.image = image,
+                                     .viewType = vk::ImageViewType::e2D,
+                                     .format = format,
+                                     .subresourceRange = {.aspectMask = aspectFlags,
+                                                          .baseMipLevel = 0,
+                                                          .levelCount = 1,
+                                                          .baseArrayLayer = 0,
+                                                          .layerCount = 1}};
     return vk::raii::ImageView(device.device, viewInfo);
   }
 
@@ -352,19 +372,36 @@ export class VulkanTutorial {
                           vk::AccessFlagBits2::eColorAttachmentWrite,
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    transitionImageLayout(commandBuffer, depthImage.image, vk::ImageLayout::eUndefined,
+                          vk::ImageLayout::eDepthAttachmentOptimal,
+                          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+                          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+                          vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                              vk::PipelineStageFlagBits2::eLateFragmentTests,
+                          vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                              vk::PipelineStageFlagBits2::eLateFragmentTests,
+                          vk::ImageAspectFlagBits::eDepth);
     vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
-    vk::RenderingAttachmentInfo attachmentInfo{
+    vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
+    vk::RenderingAttachmentInfo colorAttachmentInfo{
         .imageView = swapchain.swapChainImageViews[imageIndex],
         .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
         .loadOp = vk::AttachmentLoadOp::eClear,
         .storeOp = vk::AttachmentStoreOp::eStore,
         .clearValue = clearColor};
+    vk::RenderingAttachmentInfo depthAttachmentInfo{
+        .imageView = depthImageView,
+        .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eDontCare,
+        .clearValue = clearDepth};
 
     vk::RenderingInfo renderingInfo = {
         .renderArea = {.offset = {0, 0}, .extent = swapchain.swapChainExtent},
         .layerCount = 1,
         .colorAttachmentCount = 1,
-        .pColorAttachments = &attachmentInfo};
+        .pColorAttachments = &colorAttachmentInfo,
+        .pDepthAttachment = &depthAttachmentInfo};
 
     commandBuffer.beginRendering(renderingInfo);
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
@@ -400,14 +437,12 @@ export class VulkanTutorial {
     commandBuffer.end();
   }
 
-  void transitionImageLayout(const vk::raii::CommandBuffer& commandBuffer,
-                             vk::Image image, vk::ImageLayout oldLayout,
-                             vk::ImageLayout newLayout, vk::AccessFlags2 srcAccessMask,
-                             vk::AccessFlags2 dstAccessMask,
-                             vk::PipelineStageFlags2 srcStageMask,
-                             vk::PipelineStageFlags2 dstStageMask,
-                             uint32_t srcQFamIndex = VK_QUEUE_FAMILY_IGNORED,
-                             uint32_t dstQFamIndex = VK_QUEUE_FAMILY_IGNORED) {
+  void transitionImageLayout(
+      const vk::raii::CommandBuffer& commandBuffer, vk::Image image,
+      vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+      vk::AccessFlags2 srcAccessMask, vk::AccessFlags2 dstAccessMask,
+      vk::PipelineStageFlags2 srcStageMask, vk::PipelineStageFlags2 dstStageMask,
+      vk::ImageAspectFlags imageAspectFlags = vk::ImageAspectFlagBits::eColor) {
     vk::ImageMemoryBarrier2 barrier = {
         .srcStageMask = srcStageMask,
         .srcAccessMask = srcAccessMask,
@@ -415,10 +450,10 @@ export class VulkanTutorial {
         .dstAccessMask = dstAccessMask,
         .oldLayout = oldLayout,
         .newLayout = newLayout,
-        .srcQueueFamilyIndex = srcQFamIndex,
-        .dstQueueFamilyIndex = dstQFamIndex,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .image = image,
-        .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+        .subresourceRange = {.aspectMask = imageAspectFlags,
                              .baseMipLevel = 0,
                              .levelCount = 1,
                              .baseArrayLayer = 0,
@@ -565,7 +600,9 @@ export class VulkanTutorial {
     commandBuffers.clear();
 
     textureImage = {};
+    depthImage = {};
     textureImageView = nullptr;
+    depthImageView = nullptr;
     textureSampler = nullptr;
     vertexBuffer = {};
     indexBuffer = {};
@@ -595,7 +632,9 @@ export class VulkanTutorial {
   VulkanSwapchain swapchain;
   VulkanPipeline pipeline;
   VulkanImage textureImage;
+  VulkanImage depthImage;
   vk::raii::ImageView textureImageView = nullptr;
+  vk::raii::ImageView depthImageView = nullptr;
   vk::raii::Sampler textureSampler = nullptr;
   VulkanBuffer vertexBuffer;
   VulkanBuffer indexBuffer;

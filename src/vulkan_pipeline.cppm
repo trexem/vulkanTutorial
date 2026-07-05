@@ -22,7 +22,7 @@ import std;
 #endif
 
 struct Vertex {
-  glm::vec2 pos;
+  glm::vec3 pos;
   glm::vec3 color;
   glm::vec2 texCoord;
 
@@ -35,7 +35,7 @@ struct Vertex {
   static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDesctriptions() {
     return {{{.location = 0,
               .binding = 0,
-              .format = vk::Format::eR32G32Sfloat,
+              .format = vk::Format::eR32G32B32Sfloat,
               .offset = offsetof(Vertex, pos)},
              {.location = 1,
               .binding = 0,
@@ -133,6 +133,13 @@ export struct VulkanPipeline {
         .rasterizationSamples = vk::SampleCountFlagBits::e1,
         .sampleShadingEnable = vk::False};
 
+    vk::PipelineDepthStencilStateCreateInfo depthStencil{
+        .depthTestEnable = vk::True,
+        .depthWriteEnable = vk::True,
+        .depthCompareOp = vk::CompareOp::eLess,
+        .depthBoundsTestEnable = vk::False,
+        .stencilTestEnable = vk::False};
+
     vk::PipelineColorBlendAttachmentState colorBlendAttachment{
         .blendEnable = vk::True,
         .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
@@ -166,12 +173,14 @@ export struct VulkanPipeline {
              .pViewportState = &viewPortState,
              .pRasterizationState = &rasterizer,
              .pMultisampleState = &multisampling,
+             .pDepthStencilState = &depthStencil,
              .pColorBlendState = &colorBlending,
              .pDynamicState = &dynamicState,
              .layout = pipelineLayout,
              .renderPass = nullptr},
             {.colorAttachmentCount = 1,
-             .pColorAttachmentFormats = &swapchain.swapChainSurfaceFormat.format}};
+             .pColorAttachmentFormats = &swapchain.swapChainSurfaceFormat.format,
+             .depthAttachmentFormat = device.depthFormat}};
 
     graphicsPipeline =
         vk::raii::Pipeline(device.device, nullptr,
