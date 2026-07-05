@@ -24,6 +24,7 @@ import std;
 struct Vertex {
   glm::vec2 pos;
   glm::vec3 color;
+  glm::vec2 texCoord;
 
   static vk::VertexInputBindingDescription getBindingDescription() {
     return {.binding = 0,
@@ -31,7 +32,7 @@ struct Vertex {
             .inputRate = vk::VertexInputRate::eVertex};
   }
 
-  static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDesctriptions() {
+  static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDesctriptions() {
     return {{{.location = 0,
               .binding = 0,
               .format = vk::Format::eR32G32Sfloat,
@@ -39,7 +40,11 @@ struct Vertex {
              {.location = 1,
               .binding = 0,
               .format = vk::Format::eR32G32B32Sfloat,
-              .offset = offsetof(Vertex, color)}}};
+              .offset = offsetof(Vertex, color)},
+             {.location = 2,
+              .binding = 0,
+              .format = vk::Format::eR32G32Sfloat,
+              .offset = offsetof(Vertex, texCoord)}}};
   }
 };
 
@@ -55,13 +60,20 @@ export struct VulkanPipeline {
 
  private:
   void createDescriptorSetLayout(const VulkanDevice& device) {
-    vk::DescriptorSetLayoutBinding uboLayoutBinding{
-        .binding = 0,
-        .descriptorType = vk::DescriptorType::eUniformBuffer,
-        .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eVertex};
-    vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1,
-                                                 .pBindings = &uboLayoutBinding};
+    std::array<vk::DescriptorSetLayoutBinding, 2> bindings{
+        vk::DescriptorSetLayoutBinding{
+            .binding = 0,
+            .descriptorType = vk::DescriptorType::eUniformBuffer,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex},
+        vk::DescriptorSetLayoutBinding{
+            .binding = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment}};
+    vk::DescriptorSetLayoutCreateInfo layoutInfo{
+        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .pBindings = bindings.data()};
     descriptorSetLayout = vk::raii::DescriptorSetLayout(device.device, layoutInfo);
   }
 

@@ -69,6 +69,7 @@ export struct VulkanDevice {
         vk::PhysicalDeviceVulkan13Features,
         vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
     bool supportsRequiredFeatures =
+        features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
         features.template get<vk::PhysicalDeviceVulkan11Features>()
             .shaderDrawParameters &&
         features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
@@ -125,7 +126,7 @@ export struct VulkanDevice {
                        vk::PhysicalDeviceVulkan13Features,
                        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
         featureChain = {
-            {},                              // vk::PhysicalDeviceFeatures2
+            {.features = {.samplerAnisotropy = true}},  // vk::PhysicalDeviceFeatures2
             {.shaderDrawParameters = true},  // vk::PhysicalDeviceVulkan11Features
             {
                 .synchronization2 = true,

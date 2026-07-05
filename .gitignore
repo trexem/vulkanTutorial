@@ -20,6 +20,6 @@ compile_commands.json
 CMakeCache.txt
 .clang-format
 .clangd
-
+data/
 cmake_install.cmake
 Makefile

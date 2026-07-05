@@ -9,6 +9,9 @@ module;
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 // Block for my LSP
 #if defined(__clang__)
 #include <chrono>
@@ -23,6 +26,7 @@ export import :context;
 export import :device;
 export import :swapchain;
 export import :pipeline;
+export import :image;
 export import :buffer;
 
 #if !defined(__clang__)
@@ -35,10 +39,10 @@ constexpr uint32_t HEIGHT = 1080;
 
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
-const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
+const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
 const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
 struct UniformBufferObject {
@@ -71,6 +75,9 @@ export class VulkanTutorial {
     device.init(context);
     swapchain.init(context, device, window);
     pipeline.init(device, swapchain);
+    createTextureImage();
+    createTextureImageView();
+    createTextureSampler();
     createVertexBuffer();
     createIndexBuffer();
     createUniformBuffers();
@@ -83,6 +90,126 @@ export class VulkanTutorial {
   static void frameBufferResizeCallback(GLFWwindow* window, int width, int height) {
     auto app = reinterpret_cast<VulkanTutorial*>(glfwGetWindowUserPointer(window));
     app->frameBufferResized = true;
+  }
+
+  void createTextureImage() {
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load("../data/textures/texture.jpg", &texWidth, &texHeight,
+                                &texChannels, STBI_rgb_alpha);
+    vk::DeviceSize imageSize = texWidth * texHeight * 4;
+    if (!pixels) {
+      throw std::runtime_error("failed to load texture image!");
+    }
+
+    VulkanBuffer stagingBuffer = VulkanBufferFactory::create(
+        device, imageSize, vk::BufferUsageFlagBits::eTransferSrc,
+        VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
+    void* data = nullptr;
+    vmaMapMemory(device.allocator, stagingBuffer.allocation, &data);
+    std::memcpy(data, pixels, static_cast<size_t>(imageSize));
+    vmaUnmapMemory(device.allocator, stagingBuffer.allocation);
+
+    stbi_image_free(pixels);
+
+    textureImage = VulkanImageFactory::create(
+        device, texWidth, texHeight, vk::Format::eR8G8B8A8Srgb,
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+        VMA_MEMORY_USAGE_AUTO);
+
+    vk::raii::CommandBuffer transferCommandBuffer =
+        beginSingleTimeCommands(device.transferCommandPool);
+    transitionImageLayout(
+        transferCommandBuffer, textureImage.image, vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eTransferDstOptimal, {}, vk::AccessFlagBits2::eTransferWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer);
+    copyBufferToImage(transferCommandBuffer, stagingBuffer.buffer, textureImage.image,
+                      static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+    endSingleTimeCommands(std::move(transferCommandBuffer), device.transferQueue);
+
+    vk::raii::CommandBuffer graphicsCommandBuffer =
+        beginSingleTimeCommands(device.graphicsCommandPool);
+    transitionImageLayout(
+        graphicsCommandBuffer, textureImage.image, vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eTransferWrite,
+        vk::AccessFlagBits2::eShaderRead, vk::PipelineStageFlagBits2::eTransfer,
+        vk::PipelineStageFlagBits2::eAllCommands);
+    endSingleTimeCommands(std::move(graphicsCommandBuffer), device.graphicsQueue);
+  }
+
+  vk::raii::CommandBuffer beginSingleTimeCommands(
+      const vk::raii::CommandPool& commandPool) {
+    vk::CommandBufferAllocateInfo allocInfo{.commandPool = *commandPool,
+                                            .level = vk::CommandBufferLevel::ePrimary,
+                                            .commandBufferCount = 1};
+
+    vk::raii::CommandBuffer commandBuffer =
+        std::move(device.device.allocateCommandBuffers(allocInfo).front());
+
+    vk::CommandBufferBeginInfo beginInfo{
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+    commandBuffer.begin(beginInfo);
+
+    return commandBuffer;
+  }
+
+  void endSingleTimeCommands(vk::raii::CommandBuffer&& commandBuffer,
+                             const vk::raii::Queue& queue) {
+    commandBuffer.end();
+    vk::SubmitInfo submitInfo{.commandBufferCount = 1,
+                              .pCommandBuffers = &*commandBuffer};
+
+    queue.submit(submitInfo, nullptr);
+    queue.waitIdle();
+  }
+
+  void copyBufferToImage(vk::raii::CommandBuffer& commandBuffer, const vk::Buffer& buffer,
+                         vk::Image& image, uint32_t width, uint32_t height) {
+    vk::BufferImageCopy region{
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                             .mipLevel = 0,
+                             .baseArrayLayer = 0,
+                             .layerCount = 1},
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {width, height, 1}};
+    commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal,
+                                    region);
+  }
+
+  void createTextureImageView() {
+    textureImageView = createImageView(textureImage.image, vk::Format::eR8G8B8A8Srgb);
+  }
+
+  vk::raii::ImageView createImageView(vk::Image const& image, vk::Format format) {
+    vk::ImageViewCreateInfo viewInfo{
+        .image = image,
+        .viewType = vk::ImageViewType::e2D,
+        .format = format,
+        .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                             .baseMipLevel = 0,
+                             .levelCount = 1,
+                             .baseArrayLayer = 0,
+                             .layerCount = 1}};
+    return vk::raii::ImageView(device.device, viewInfo);
+  }
+
+  void createTextureSampler() {
+    vk::PhysicalDeviceProperties properties = device.physicalDevice.getProperties();
+    vk::SamplerCreateInfo samplerInfo{
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eLinear,
+        .addressModeU = vk::SamplerAddressMode::eRepeat,
+        .addressModeV = vk::SamplerAddressMode::eRepeat,
+        .addressModeW = vk::SamplerAddressMode::eRepeat,
+        .anisotropyEnable = vk::True,
+        .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+        .compareEnable = vk::False,
+        .compareOp = vk::CompareOp::eAlways,
+        .unnormalizedCoordinates = vk::False};
+    textureSampler = vk::raii::Sampler(device.device, samplerInfo);
   }
 
   void createVertexBuffer() {
@@ -134,13 +261,16 @@ export class VulkanTutorial {
   }
 
   void createDescriptorPool() {
-    vk::DescriptorPoolSize poolSize{.type = vk::DescriptorType::eUniformBuffer,
-                                    .descriptorCount = MAX_FRAMES_IN_FLIGHT};
+    std::array<vk::DescriptorPoolSize, 2> poolSize{
+        vk::DescriptorPoolSize{.type = vk::DescriptorType::eUniformBuffer,
+                               .descriptorCount = MAX_FRAMES_IN_FLIGHT},
+        vk::DescriptorPoolSize{.type = vk::DescriptorType::eCombinedImageSampler,
+                               .descriptorCount = MAX_FRAMES_IN_FLIGHT}};
     vk::DescriptorPoolCreateInfo poolInfo{
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
         .maxSets = MAX_FRAMES_IN_FLIGHT,
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize};
+        .poolSizeCount = static_cast<uint32_t>(poolSize.size()),
+        .pPoolSizes = poolSize.data()};
     descriptorPool = vk::raii::DescriptorPool(device.device, poolInfo);
   }
 
@@ -156,14 +286,25 @@ export class VulkanTutorial {
       vk::DescriptorBufferInfo bufferInfo{.buffer = uniformBuffers[i].buffer,
                                           .offset = 0,
                                           .range = sizeof(UniformBufferObject)};
-      vk::WriteDescriptorSet descriptorWrite{
-          .dstSet = *descriptorSets[i],
-          .dstBinding = 0,
-          .dstArrayElement = 0,
-          .descriptorCount = 1,
-          .descriptorType = vk::DescriptorType::eUniformBuffer,
-          .pBufferInfo = &bufferInfo};
-      device.device.updateDescriptorSets(descriptorWrite, {});
+      vk::DescriptorImageInfo imageInfo{
+          .sampler = textureSampler,
+          .imageView = textureImageView,
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+      std::array<vk::WriteDescriptorSet, 2> descriptorWrites{
+          vk::WriteDescriptorSet{.dstSet = *descriptorSets[i],
+                                 .dstBinding = 0,
+                                 .dstArrayElement = 0,
+                                 .descriptorCount = 1,
+                                 .descriptorType = vk::DescriptorType::eUniformBuffer,
+                                 .pBufferInfo = &bufferInfo},
+          vk::WriteDescriptorSet{
+              .dstSet = *descriptorSets[i],
+              .dstBinding = 1,
+              .dstArrayElement = 0,
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+              .pImageInfo = &imageInfo}};
+      device.device.updateDescriptorSets(descriptorWrites, {});
     }
   }
 
@@ -205,7 +346,8 @@ export class VulkanTutorial {
   void recordCommandBuffer(uint32_t imageIndex) {
     auto& commandBuffer = commandBuffers[frameIndex];
     commandBuffer.begin({});
-    transitionImageLayout(imageIndex, vk::ImageLayout::eUndefined,
+    transitionImageLayout(commandBuffer, swapchain.swapChainImages[imageIndex],
+                          vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eColorAttachmentOptimal, {},
                           vk::AccessFlagBits2::eColorAttachmentWrite,
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -249,7 +391,8 @@ export class VulkanTutorial {
 
     commandBuffer.endRendering();
 
-    transitionImageLayout(imageIndex, vk::ImageLayout::eColorAttachmentOptimal,
+    transitionImageLayout(commandBuffer, swapchain.swapChainImages[imageIndex],
+                          vk::ImageLayout::eColorAttachmentOptimal,
                           vk::ImageLayout::ePresentSrcKHR,
                           vk::AccessFlagBits2::eColorAttachmentWrite, {},
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -257,11 +400,14 @@ export class VulkanTutorial {
     commandBuffer.end();
   }
 
-  void transitionImageLayout(uint32_t imageindex, vk::ImageLayout oldLayout,
+  void transitionImageLayout(const vk::raii::CommandBuffer& commandBuffer,
+                             vk::Image image, vk::ImageLayout oldLayout,
                              vk::ImageLayout newLayout, vk::AccessFlags2 srcAccessMask,
                              vk::AccessFlags2 dstAccessMask,
                              vk::PipelineStageFlags2 srcStageMask,
-                             vk::PipelineStageFlags2 dstStageMask) {
+                             vk::PipelineStageFlags2 dstStageMask,
+                             uint32_t srcQFamIndex = VK_QUEUE_FAMILY_IGNORED,
+                             uint32_t dstQFamIndex = VK_QUEUE_FAMILY_IGNORED) {
     vk::ImageMemoryBarrier2 barrier = {
         .srcStageMask = srcStageMask,
         .srcAccessMask = srcAccessMask,
@@ -269,9 +415,9 @@ export class VulkanTutorial {
         .dstAccessMask = dstAccessMask,
         .oldLayout = oldLayout,
         .newLayout = newLayout,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = swapchain.swapChainImages[imageindex],
+        .srcQueueFamilyIndex = srcQFamIndex,
+        .dstQueueFamilyIndex = dstQFamIndex,
+        .image = image,
         .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
                              .baseMipLevel = 0,
                              .levelCount = 1,
@@ -281,7 +427,7 @@ export class VulkanTutorial {
                                          .imageMemoryBarrierCount = 1,
                                          .pImageMemoryBarriers = &barrier};
 
-    commandBuffers[frameIndex].pipelineBarrier2(dependencyInfo);
+    commandBuffer.pipelineBarrier2(dependencyInfo);
   }
 
   void createSyncObjects() {
@@ -418,6 +564,9 @@ export class VulkanTutorial {
     presentCompleteSemaphores.clear();
     commandBuffers.clear();
 
+    textureImage = {};
+    textureImageView = nullptr;
+    textureSampler = nullptr;
     vertexBuffer = {};
     indexBuffer = {};
 
@@ -445,6 +594,9 @@ export class VulkanTutorial {
   VulkanDevice device;
   VulkanSwapchain swapchain;
   VulkanPipeline pipeline;
+  VulkanImage textureImage;
+  vk::raii::ImageView textureImageView = nullptr;
+  vk::raii::Sampler textureSampler = nullptr;
   VulkanBuffer vertexBuffer;
   VulkanBuffer indexBuffer;
   std::vector<VulkanBuffer> uniformBuffers;
