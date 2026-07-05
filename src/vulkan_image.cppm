@@ -56,7 +56,7 @@ export struct VulkanImage {
 export class VulkanImageFactory {
  public:
   static VulkanImage create(const VulkanDevice& device, uint32_t width, uint32_t height,
-                            vk::Format format, vk::ImageTiling tiling,
+                            uint32_t mipLevels, vk::Format format, vk::ImageTiling tiling,
                             vk::ImageUsageFlags usage, VmaMemoryUsage vmaUsage) {
     VulkanImage outImage;
     outImage.allocator = device.allocator;
@@ -64,7 +64,7 @@ export class VulkanImageFactory {
     vk::ImageCreateInfo imageInfo{.imageType = vk::ImageType::e2D,
                                   .format = format,
                                   .extent = {width, height, 1},
-                                  .mipLevels = 1,
+                                  .mipLevels = mipLevels,
                                   .arrayLayers = 1,
                                   .samples = vk::SampleCountFlagBits::e1,
                                   .tiling = tiling,
