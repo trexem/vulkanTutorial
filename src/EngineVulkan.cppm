@@ -77,6 +77,7 @@ export class VulkanTutorial {
     device.init(context);
     swapchain.init(context, device, window);
     pipeline.init(device, swapchain);
+    createColorResources();
     createDepthResources();
     createTextureImage();
     createTextureImageView();
@@ -96,11 +97,23 @@ export class VulkanTutorial {
     app->frameBufferResized = true;
   }
 
+  void createColorResources() {
+    vk::Format colorFormat = swapchain.swapChainSurfaceFormat.format;
+    colorImage = VulkanImageFactory::create(
+        device, swapchain.swapChainExtent.width, swapchain.swapChainExtent.height, 1,
+        device.msaaSamples, colorFormat, vk::ImageTiling::eOptimal,
+        vk::ImageUsageFlagBits::eTransientAttachment |
+            vk::ImageUsageFlagBits::eColorAttachment,
+        VMA_MEMORY_USAGE_AUTO);
+    colorImageView = createImageView(colorImage.image, colorFormat,
+                                     vk::ImageAspectFlagBits::eColor, 1);
+  }
+
   void createDepthResources() {
     vk::Format depthFormat = device.depthFormat;
     depthImage = VulkanImageFactory::create(
         device, swapchain.swapChainExtent.width, swapchain.swapChainExtent.height, 1,
-        depthFormat, vk::ImageTiling::eOptimal,
+        device.msaaSamples, depthFormat, vk::ImageTiling::eOptimal,
         vk::ImageUsageFlagBits::eDepthStencilAttachment, VMA_MEMORY_USAGE_AUTO);
     depthImageView = createImageView(depthImage.image, depthFormat,
                                      vk::ImageAspectFlagBits::eDepth, 1);
@@ -129,8 +142,8 @@ export class VulkanTutorial {
     stbi_image_free(pixels);
 
     textureImage = VulkanImageFactory::create(
-        device, texWidth, texHeight, mipLevels, vk::Format::eR8G8B8A8Srgb,
-        vk::ImageTiling::eOptimal,
+        device, texWidth, texHeight, mipLevels, vk::SampleCountFlagBits::e1,
+        vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
         vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
             vk::ImageUsageFlagBits::eSampled,
         VMA_MEMORY_USAGE_AUTO);
@@ -480,12 +493,22 @@ export class VulkanTutorial {
   void recordCommandBuffer(uint32_t imageIndex) {
     auto& commandBuffer = commandBuffers[frameIndex];
     commandBuffer.begin({});
+    // Before rendering, transition the swapchain image to eColorAttachmentOptimal
     transitionImageLayout(commandBuffer, swapchain.swapChainImages[imageIndex],
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eColorAttachmentOptimal, {},
                           vk::AccessFlagBits2::eColorAttachmentWrite,
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+    // Transition the multisampled color image to eColorAttachementOptimal
+    transitionImageLayout(commandBuffer, colorImage.image, vk::ImageLayout::eUndefined,
+                          vk::ImageLayout::eColorAttachmentOptimal,
+                          vk::AccessFlagBits2::eColorAttachmentWrite,
+                          vk::AccessFlagBits2::eColorAttachmentWrite,
+                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                          vk::ImageAspectFlagBits::eColor);
+    // Transition the depth image to eDepthAttachmentOptimal
     transitionImageLayout(commandBuffer, depthImage.image, vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eDepthAttachmentOptimal,
                           vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
@@ -497,12 +520,19 @@ export class VulkanTutorial {
                           vk::ImageAspectFlagBits::eDepth);
     vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
     vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
+
+    // Color attachment (multisampled) with resolve attachment
     vk::RenderingAttachmentInfo colorAttachmentInfo{
-        .imageView = swapchain.swapChainImageViews[imageIndex],
+        .imageView = colorImageView,
         .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .resolveMode = vk::ResolveModeFlagBits::eAverage,
+        .resolveImageView = swapchain.swapChainImageViews[imageIndex],
+        .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,
         .loadOp = vk::AttachmentLoadOp::eClear,
         .storeOp = vk::AttachmentStoreOp::eStore,
         .clearValue = clearColor};
+
+    // Depth attachment
     vk::RenderingAttachmentInfo depthAttachmentInfo{
         .imageView = depthImageView,
         .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
@@ -704,6 +734,7 @@ export class VulkanTutorial {
     device.device.waitIdle();
 
     swapchain.recreate(context, device, window);
+    createColorResources();
     createDepthResources();
 
     frameIndex = 0;
@@ -717,8 +748,10 @@ export class VulkanTutorial {
 
     textureImage = {};
     depthImage = {};
+    colorImage = {};
     textureImageView = nullptr;
     depthImageView = nullptr;
+    colorImageView = nullptr;
     textureSampler = nullptr;
     vertexBuffer = {};
     indexBuffer = {};
@@ -750,8 +783,10 @@ export class VulkanTutorial {
   uint32_t mipLevels = 0;
   VulkanImage textureImage;
   VulkanImage depthImage;
+  VulkanImage colorImage;
   vk::raii::ImageView textureImageView = nullptr;
   vk::raii::ImageView depthImageView = nullptr;
+  vk::raii::ImageView colorImageView = nullptr;
   vk::raii::Sampler textureSampler = nullptr;
   VulkanBuffer vertexBuffer;
   VulkanBuffer indexBuffer;

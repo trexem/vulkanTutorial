@@ -30,6 +30,7 @@ export struct VulkanDevice {
   vk::raii::Queue transferQueue = nullptr;
   vk::raii::CommandPool graphicsCommandPool = nullptr;
   vk::raii::CommandPool transferCommandPool = nullptr;
+  vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
   vk::Format depthFormat = vk::Format::eUndefined;
   uint32_t graphicsQueueIndex = ~0;
   uint32_t transferQueueIndex = ~0;
@@ -57,6 +58,7 @@ export struct VulkanDevice {
       throw std::runtime_error("failed to find a suitable GPU!");
     }
     physicalDevice = *devIt;
+    msaaSamples = getMxUsableSampleCount();
   }
 
   bool isDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice,
@@ -204,5 +206,31 @@ export struct VulkanDevice {
                                 vk::Format::eD24UnormS8Uint},
                                vk::ImageTiling::eOptimal,
                                vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+  }
+
+  vk::SampleCountFlagBits getMxUsableSampleCount() {
+    vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();
+
+    vk::SampleCountFlags counts = properties.limits.framebufferColorSampleCounts &
+                                  properties.limits.framebufferDepthSampleCounts;
+    if (counts & vk::SampleCountFlagBits::e64) {
+      return vk::SampleCountFlagBits::e64;
+    }
+    if (counts & vk::SampleCountFlagBits::e32) {
+      return vk::SampleCountFlagBits::e32;
+    }
+    if (counts & vk::SampleCountFlagBits::e16) {
+      return vk::SampleCountFlagBits::e16;
+    }
+    if (counts & vk::SampleCountFlagBits::e8) {
+      return vk::SampleCountFlagBits::e8;
+    }
+    if (counts & vk::SampleCountFlagBits::e4) {
+      return vk::SampleCountFlagBits::e4;
+    }
+    if (counts & vk::SampleCountFlagBits::e2) {
+      return vk::SampleCountFlagBits::e2;
+    }
+    return vk::SampleCountFlagBits::e1;
   }
 };

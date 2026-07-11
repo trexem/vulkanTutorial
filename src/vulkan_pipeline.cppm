@@ -147,8 +147,7 @@ export struct VulkanPipeline {
         .lineWidth = 1.0f};
 
     vk::PipelineMultisampleStateCreateInfo multisampling{
-        .rasterizationSamples = vk::SampleCountFlagBits::e1,
-        .sampleShadingEnable = vk::False};
+        .rasterizationSamples = device.msaaSamples, .sampleShadingEnable = vk::False};
 
     vk::PipelineDepthStencilStateCreateInfo depthStencil{
         .depthTestEnable = vk::True,
