@@ -41,6 +41,7 @@ import std;
 
 constexpr uint32_t WIDTH = 1920;
 constexpr uint32_t HEIGHT = 1080;
+constexpr uint32_t PARTICLE_COUNT = 8192;
 
 const std::string MODEL_PATH = "../data/models/viking_room.obj";
 const std::string TEXTURE_PATH = "../data/textures/viking_room.png";
@@ -48,9 +49,10 @@ const std::string TEXTURE_PATH = "../data/textures/viking_room.png";
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 struct UniformBufferObject {
-  alignas(16) glm::mat4 model;
-  alignas(16) glm::mat4 view;
-  alignas(16) glm::mat4 proj;
+  // alignas(16) glm::mat4 model;
+  // alignas(16) glm::mat4 view;
+  // alignas(16) glm::mat4 proj;
+  float deltaTime = 1.0f;
 };
 
 export class VulkanTutorial {
@@ -79,16 +81,20 @@ export class VulkanTutorial {
     pipeline.init(device, swapchain);
     createColorResources();
     createDepthResources();
-    createTextureImage();
-    createTextureImageView();
-    createTextureSampler();
-    loadModel();
-    createVertexBuffer();
-    createIndexBuffer();
+    // createTextureImage();
+    // createTextureImageView();
+    // createTextureSampler();
+    // loadModel();
+    // createVertexBuffer();
+    // createIndexBuffer();
+    createShaderStorageBuffers();
     createUniformBuffers();
-    createDescriptorPool();
-    createDescriptorSets();
+    // createDescriptorPool();
+    createComputeDescriptorPool();
+    //    createDescriptorSets();
+    createComputeDescriptorSets();
     createCommandBuffers();
+    createComputeCommandBuffers();
     createSyncObjects();
   }
 
@@ -396,6 +402,45 @@ export class VulkanTutorial {
     copyBuffer(stagingBuffer.buffer, indexBuffer.buffer, bufferSize);
   }
 
+  void createShaderStorageBuffers() {
+    std::default_random_engine rndEngine(static_cast<unsigned>(time(nullptr)));
+    std::uniform_real_distribution rndDist(0.0f, 1.0f);
+
+    std::vector<Particle> particles(PARTICLE_COUNT);
+    for (auto& particle : particles) {
+      float r = 0.25f * sqrtf(rndDist(rndEngine));
+      float theta = rndDist(rndEngine) * 2.0f * 3.14159265f;
+      float x = r * cosf(theta) * HEIGHT / WIDTH;
+      float y = r * sinf(theta);
+      particle.position = glm::vec2(x, y);
+      particle.velocity = normalize(glm::vec2(x, y)) * 0.00025f;
+      particle.color =
+          glm::vec4(rndDist(rndEngine), rndDist(rndEngine), rndDist(rndEngine), 1.0f);
+    }
+
+    vk::DeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
+
+    VulkanBuffer stagingBuffer = VulkanBufferFactory::create(
+        device, bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+        VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
+    void* data = nullptr;
+    vmaMapMemory(device.allocator, stagingBuffer.allocation, &data);
+    std::memcpy(data, particles.data(), static_cast<size_t>(bufferSize));
+    vmaUnmapMemory(device.allocator, stagingBuffer.allocation);
+
+    shaderStorageBuffers.clear();
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      VulkanBuffer buffer =
+          VulkanBufferFactory::create(device, bufferSize,
+                                      vk::BufferUsageFlagBits::eStorageBuffer |
+                                          vk::BufferUsageFlagBits::eVertexBuffer |
+                                          vk::BufferUsageFlagBits::eTransferDst,
+                                      VMA_MEMORY_USAGE_AUTO);
+      copyBuffer(stagingBuffer.buffer, buffer.buffer, bufferSize);
+      shaderStorageBuffers.emplace_back(std::move(buffer));
+    }
+  }
+
   void createUniformBuffers() {
     vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -419,6 +464,68 @@ export class VulkanTutorial {
         .poolSizeCount = static_cast<uint32_t>(poolSize.size()),
         .pPoolSizes = poolSize.data()};
     descriptorPool = vk::raii::DescriptorPool(device.device, poolInfo);
+  }
+
+  void createComputeDescriptorPool() {
+    std::array poolSize{
+        vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
+        vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer,
+                               MAX_FRAMES_IN_FLIGHT * 2)};
+    vk::DescriptorPoolCreateInfo poolInfo{};
+    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
+    poolInfo.poolSizeCount = poolSize.size();
+    poolInfo.pPoolSizes = poolSize.data();
+    computeDescriptorPool = vk::raii::DescriptorPool(device.device, poolInfo);
+  }
+
+  void createComputeDescriptorSets() {
+    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+                                                 pipeline.computeDescriptorSetLayout);
+    vk::DescriptorSetAllocateInfo allocInfo{};
+    allocInfo.descriptorPool = *computeDescriptorPool;
+    allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocInfo.pSetLayouts = layouts.data();
+    computeDescriptorSets.clear();
+    computeDescriptorSets = device.device.allocateDescriptorSets(allocInfo);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      vk::DescriptorBufferInfo bufferInfo(uniformBuffers[i].buffer, 0,
+                                          sizeof(UniformBufferObject));
+
+      vk::DescriptorBufferInfo storageBufferInfoLastFrame(
+          shaderStorageBuffers[(i - 1) % MAX_FRAMES_IN_FLIGHT].buffer, 0,
+          sizeof(Particle) * PARTICLE_COUNT);
+      vk::DescriptorBufferInfo storageBufferInfoCurrentFrame(
+          shaderStorageBuffers[i].buffer, 0, sizeof(Particle) * PARTICLE_COUNT);
+      std::array descriptorWrites{
+          vk::WriteDescriptorSet{.dstSet = *computeDescriptorSets[i],
+                                 .dstBinding = 0,
+                                 .dstArrayElement = 0,
+                                 .descriptorCount = 1,
+                                 .descriptorType = vk::DescriptorType::eUniformBuffer,
+                                 .pImageInfo = nullptr,
+                                 .pBufferInfo = &bufferInfo,
+                                 .pTexelBufferView = nullptr},
+          vk::WriteDescriptorSet{.dstSet = *computeDescriptorSets[i],
+                                 .dstBinding = 1,
+                                 .dstArrayElement = 0,
+                                 .descriptorCount = 1,
+                                 .descriptorType = vk::DescriptorType::eStorageBuffer,
+                                 .pImageInfo = nullptr,
+                                 .pBufferInfo = &storageBufferInfoLastFrame,
+                                 .pTexelBufferView = nullptr},
+          vk::WriteDescriptorSet{.dstSet = *computeDescriptorSets[i],
+                                 .dstBinding = 2,
+                                 .dstArrayElement = 0,
+                                 .descriptorCount = 1,
+                                 .descriptorType = vk::DescriptorType::eStorageBuffer,
+                                 .pImageInfo = nullptr,
+                                 .pBufferInfo = &storageBufferInfoCurrentFrame,
+                                 .pTexelBufferView = nullptr},
+      };
+      device.device.updateDescriptorSets(descriptorWrites, {});
+    }
   }
 
   void createDescriptorSets() {
@@ -490,8 +597,17 @@ export class VulkanTutorial {
     commandBuffers = vk::raii::CommandBuffers(device.device, allocInfo);
   }
 
+  void createComputeCommandBuffers() {
+    computeCommandBuffers.clear();
+    vk::CommandBufferAllocateInfo allocInfo{.commandPool = device.computeCommandPool,
+                                            .level = vk::CommandBufferLevel::ePrimary,
+                                            .commandBufferCount = MAX_FRAMES_IN_FLIGHT};
+    computeCommandBuffers = vk::raii::CommandBuffers(device.device, allocInfo);
+  }
+
   void recordCommandBuffer(uint32_t imageIndex) {
     auto& commandBuffer = commandBuffers[frameIndex];
+    commandBuffer.reset();
     commandBuffer.begin({});
     // Before rendering, transition the swapchain image to eColorAttachmentOptimal
     transitionImageLayout(commandBuffer, swapchain.swapChainImages[imageIndex],
@@ -561,14 +677,16 @@ export class VulkanTutorial {
     vk::Rect2D scissor{vk::Offset2D{0, 0}, swapchain.swapChainExtent};
     commandBuffer.setScissor(0, scissor);
 
-    commandBuffer.bindVertexBuffers(0, vertexBuffer.buffer, {0});
-    commandBuffer.bindIndexBuffer(
-        indexBuffer.buffer, 0, vk::IndexTypeValue<decltype(indices)::value_type>::value);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                     pipeline.pipelineLayout, 0,
-                                     *descriptorSets[frameIndex], nullptr);
+    commandBuffer.bindVertexBuffers(0, {shaderStorageBuffers[frameIndex].buffer}, {0});
+    commandBuffer.draw(PARTICLE_COUNT, 1, 0, 0);
+    // commandBuffer.bindIndexBuffer(
+    //     indexBuffer.buffer, 0,
+    //     vk::IndexTypeValue<decltype(indices)::value_type>::value);
+    // commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+    //                                  pipeline.pipelineLayout, 0,
+    //                                  *descriptorSets[frameIndex], nullptr);
 
-    commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+    // commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
     commandBuffer.endRendering();
 
@@ -610,18 +728,32 @@ export class VulkanTutorial {
     commandBuffer.pipelineBarrier2(dependencyInfo);
   }
 
+  void recordComputeCommandBuffer() {
+    auto& commandBuffer = computeCommandBuffers[frameIndex];
+    commandBuffer.reset();
+    commandBuffer.begin({});
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.computePipeline);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                                     pipeline.computePipelineLayout, 0,
+                                     {computeDescriptorSets[frameIndex]}, {});
+    commandBuffer.dispatch(PARTICLE_COUNT / 256, 1, 1);
+    commandBuffer.end();
+  }
+
   void createSyncObjects() {
     assert(presentCompleteSemaphores.empty() && renderFinishedSemaphores.empty() &&
            inFlightFences.empty());
-    for (size_t i = 0; i < swapchain.swapChainImages.size(); i++) {
-      renderFinishedSemaphores.emplace_back(device.device, vk::SemaphoreCreateInfo());
-    }
+    // for (size_t i = 0; i < swapchain.swapChainImages.size(); i++) {
+    //   renderFinishedSemaphores.emplace_back(device.device, vk::SemaphoreCreateInfo());
+    // }
+    vk::SemaphoreTypeCreateInfo semaphoreType{
+        .semaphoreType = vk::SemaphoreType::eTimeline, .initialValue = 0};
+    semaphore = vk::raii::Semaphore(device.device, {.pNext = &semaphoreType});
+    timelineValue = 0;
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-      presentCompleteSemaphores.emplace_back(device.device, vk::SemaphoreCreateInfo());
-      inFlightFences.emplace_back(
-          device.device,
-          vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
+      // presentCompleteSemaphores.emplace_back(device.device, vk::SemaphoreCreateInfo());
+      inFlightFences.emplace_back(device.device, vk::FenceCreateInfo{});
     }
   }
 
@@ -629,55 +761,99 @@ export class VulkanTutorial {
     while (!glfwWindowShouldClose(window)) {
       glfwPollEvents();
       drawFrame();
+      double currentTime = glfwGetTime();
+      lastFrameTime = (currentTime - lastTime) * 1000.0;
+      lastTime = currentTime;
     }
 
     device.device.waitIdle();
   }
 
   void drawFrame() {
+    auto imageIndex = acquireNextFrameImage();
+    if (!imageIndex) return;
     auto fenceResult =
         device.device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
     if (fenceResult != vk::Result::eSuccess) {
       throw std::runtime_error("failed to wait for fence");
     }
-    auto imageIndex = acquireNextFrameImage();
-    if (!imageIndex) return;
-    updateUniformBuffer(frameIndex);
 
     device.device.resetFences(*inFlightFences[frameIndex]);
 
-    commandBuffers[frameIndex].reset();
-    recordCommandBuffer(*imageIndex);
+    updateUniformBuffer(frameIndex);
 
-    vk::PipelineStageFlags waitDestinationStageMask(
-        vk::PipelineStageFlagBits::eColorAttachmentOutput);
-    const vk::SubmitInfo submitInfo{
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &*presentCompleteSemaphores[frameIndex],
-        .pWaitDstStageMask = &waitDestinationStageMask,
-        .commandBufferCount = 1,
-        .pCommandBuffers = &*commandBuffers[frameIndex],
-        .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &*renderFinishedSemaphores[*imageIndex]};
+    uint64_t computeWaitValue = timelineValue;
+    uint64_t computeSignalValue = ++timelineValue;
+    uint64_t graphicsWaitValue = computeSignalValue;
+    uint64_t graphicsSignalValue = ++timelineValue;
 
-    device.graphicsQueue.submit(submitInfo, *inFlightFences[frameIndex]);
+    {
+      recordComputeCommandBuffer();
 
-    vk::PresentInfoKHR presentInfoKHR{
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &*renderFinishedSemaphores[*imageIndex],
-        .swapchainCount = 1,
-        .pSwapchains = &*swapchain.swapChain,
-        .pImageIndices = &imageIndex.value()};
+      vk::TimelineSemaphoreSubmitInfo computeTimelineInfo{
+          .waitSemaphoreValueCount = 1,
+          .pWaitSemaphoreValues = &computeWaitValue,
+          .signalSemaphoreValueCount = 1,
+          .pSignalSemaphoreValues = &computeSignalValue};
 
-    presentGraphicsQueue(presentInfoKHR);
+      vk::PipelineStageFlags waitStages[] = {vk::PipelineStageFlagBits::eComputeShader};
 
+      vk::SubmitInfo computeSubmitInfo{
+          .pNext = &computeTimelineInfo,
+          .waitSemaphoreCount = 1,
+          .pWaitSemaphores = &*semaphore,
+          .pWaitDstStageMask = waitStages,
+          .commandBufferCount = 1,
+          .pCommandBuffers = &*computeCommandBuffers[frameIndex],
+          .signalSemaphoreCount = 1,
+          .pSignalSemaphores = &*semaphore};
+
+      device.computeQueue.submit(computeSubmitInfo, nullptr);
+    }
+    {
+      commandBuffers[frameIndex].reset();
+      recordCommandBuffer(*imageIndex);
+
+      vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eVertexInput;
+      vk::TimelineSemaphoreSubmitInfo graphicsTimelineInfo{
+          .waitSemaphoreValueCount = 1,
+          .pWaitSemaphoreValues = &graphicsWaitValue,
+          .signalSemaphoreValueCount = 1,
+          .pSignalSemaphoreValues = &graphicsSignalValue};
+      vk::SubmitInfo graphicsSubmitInfo{.pNext = &graphicsTimelineInfo,
+                                        .waitSemaphoreCount = 1,
+                                        .pWaitSemaphores = &*semaphore,
+                                        .pWaitDstStageMask = &waitStage,
+                                        .commandBufferCount = 1,
+                                        .pCommandBuffers = &*commandBuffers[frameIndex],
+                                        .signalSemaphoreCount = 1,
+                                        .pSignalSemaphores = &*semaphore};
+      device.graphicsQueue.submit(graphicsSubmitInfo, nullptr);
+    }
+    {
+      vk::SemaphoreWaitInfo waitInfo{.semaphoreCount = 1,
+                                     .pSemaphores = &*semaphore,
+                                     .pValues = &graphicsSignalValue};
+      auto result = device.device.waitSemaphores(waitInfo, UINT64_MAX);
+      if (result != vk::Result::eSuccess) {
+        throw std::runtime_error("failed to wait for semaphore!");
+      }
+
+      vk::PresentInfoKHR presentInfoKHR{.waitSemaphoreCount = 0,
+                                        .pWaitSemaphores = nullptr,
+                                        .swapchainCount = 1,
+                                        .pSwapchains = &*swapchain.swapChain,
+                                        .pImageIndices = &imageIndex.value()};
+
+      presentGraphicsQueue(presentInfoKHR);
+    }
     frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
   }
 
   std::optional<uint32_t> acquireNextFrameImage() {
     try {
       auto [result, idx] = swapchain.swapChain.acquireNextImage(
-          UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
+          UINT64_MAX, nullptr, *inFlightFences[frameIndex]);
       if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
         throw std::runtime_error("failed to acquire swap chain image!");
       }
@@ -690,23 +866,9 @@ export class VulkanTutorial {
   }
 
   void updateUniformBuffer(uint32_t currentImage) {
-    static auto startTime = std::chrono::high_resolution_clock::now();
-
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime -
-                                                                            startTime)
-                     .count();
-
     UniformBufferObject ubo{};
-    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
-                            glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.view = lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
-                      glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.proj = glm::perspective(glm::radians(45.0f),
-                                static_cast<float>(swapchain.swapChainExtent.width) /
-                                    static_cast<float>(swapchain.swapChainExtent.height),
-                                0.1f, 10.0f);
-    ubo.proj[1][1] *= -1;
+    ubo.deltaTime = static_cast<float>(lastFrameTime) * 2.0f;
+
     std::memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
   }
 
@@ -744,7 +906,9 @@ export class VulkanTutorial {
     inFlightFences.clear();
     renderFinishedSemaphores.clear();
     presentCompleteSemaphores.clear();
+    semaphore = nullptr;
     commandBuffers.clear();
+    computeCommandBuffers.clear();
 
     textureImage = {};
     depthImage = {};
@@ -759,10 +923,14 @@ export class VulkanTutorial {
     uniformBuffers.clear();
     uniformBuffersMapped.clear();
 
+    shaderStorageBuffers.clear();
+
     pipeline = {};
     swapchain.cleanup();
     descriptorSets.clear();
+    computeDescriptorSets.clear();
     descriptorPool = nullptr;
+    computeDescriptorPool = nullptr;
     vmaDestroyAllocator(device.allocator);
     device.allocator = nullptr;
     device = {};
@@ -791,16 +959,24 @@ export class VulkanTutorial {
   VulkanBuffer vertexBuffer;
   VulkanBuffer indexBuffer;
   std::vector<VulkanBuffer> uniformBuffers;
+  std::vector<VulkanBuffer> shaderStorageBuffers;
   std::vector<void*> uniformBuffersMapped;
   vk::raii::DescriptorPool descriptorPool = nullptr;
+  vk::raii::DescriptorPool computeDescriptorPool = nullptr;
   std::vector<vk::raii::DescriptorSet> descriptorSets;
+  std::vector<vk::raii::DescriptorSet> computeDescriptorSets;
   uint32_t frameIndex = 0;
   std::vector<vk::raii::CommandBuffer> commandBuffers;
+  std::vector<vk::raii::CommandBuffer> computeCommandBuffers;
 
   std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
   std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
+  vk::raii::Semaphore semaphore = nullptr;
+  uint64_t timelineValue = 0;
   std::vector<vk::raii::Fence> inFlightFences;
   bool frameBufferResized = false;
   std::vector<Vertex> vertices;
   std::vector<uint32_t> indices;
+  double lastFrameTime = 0.0;
+  double lastTime = 0.0f;
 };

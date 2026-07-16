@@ -54,6 +54,23 @@ struct Vertex {
   }
 };
 
+struct Particle {
+  glm::vec2 position;
+  glm::vec2 velocity;
+  glm::vec4 color;
+
+  static vk::VertexInputBindingDescription getBindingDescription() {
+    return {0, sizeof(Particle), vk::VertexInputRate::eVertex};
+  }
+
+  static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions() {
+    return {vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat,
+                                                offsetof(Particle, position)),
+            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32A32Sfloat,
+                                                offsetof(Particle, color))};
+  }
+};
+
 namespace std {
 template <>
 struct hash<Vertex> {
@@ -70,9 +87,15 @@ export struct VulkanPipeline {
   vk::raii::PipelineLayout pipelineLayout = nullptr;
   vk::raii::Pipeline graphicsPipeline = nullptr;
 
+  vk::raii::DescriptorSetLayout computeDescriptorSetLayout = nullptr;
+  vk::raii::PipelineLayout computePipelineLayout = nullptr;
+  vk::raii::Pipeline computePipeline = nullptr;
+
   void init(const VulkanDevice& device, const VulkanSwapchain& swapchain) {
-    createDescriptorSetLayout(device);
+    //    createDescriptorSetLayout(device);
+    createComputeDescriptorSetLayout(device);
     createGraphicsPipeline(device, swapchain);
+    createComputePipeline(device);
   }
 
  private:
@@ -92,6 +115,21 @@ export struct VulkanPipeline {
         .bindingCount = static_cast<uint32_t>(bindings.size()),
         .pBindings = bindings.data()};
     descriptorSetLayout = vk::raii::DescriptorSetLayout(device.device, layoutInfo);
+  }
+
+  void createComputeDescriptorSetLayout(const VulkanDevice& device) {
+    std::array layoutBindings{
+        vk::DescriptorSetLayoutBinding(0, vk::DescriptorType::eUniformBuffer, 1,
+                                       vk::ShaderStageFlagBits::eCompute, nullptr),
+        vk::DescriptorSetLayoutBinding(1, vk::DescriptorType::eStorageBuffer, 1,
+                                       vk::ShaderStageFlagBits::eCompute, nullptr),
+        vk::DescriptorSetLayoutBinding(2, vk::DescriptorType::eStorageBuffer, 1,
+                                       vk::ShaderStageFlagBits::eCompute, nullptr)};
+
+    vk::DescriptorSetLayoutCreateInfo layoutInfo{
+        .bindingCount = static_cast<uint32_t>(layoutBindings.size()),
+        .pBindings = layoutBindings.data()};
+    computeDescriptorSetLayout = vk::raii::DescriptorSetLayout(device.device, layoutInfo);
   }
 
   void createGraphicsPipeline(const VulkanDevice& device,
@@ -115,8 +153,8 @@ export struct VulkanPipeline {
                                                         fragShaderStageInfo};
 
     // Fixed functions
-    auto bindingDescription = Vertex::getBindingDescription();
-    auto attributeDescriptions = Vertex::getAttributeDesctriptions();
+    auto bindingDescription = Particle::getBindingDescription();
+    auto attributeDescriptions = Particle::getAttributeDescriptions();
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
         .vertexBindingDescriptionCount = 1,
         .pVertexBindingDescriptions = &bindingDescription,
@@ -125,7 +163,8 @@ export struct VulkanPipeline {
         .pVertexAttributeDescriptions = attributeDescriptions.data()};
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
-        .topology = vk::PrimitiveTopology::eTriangleList};
+        .topology = vk::PrimitiveTopology::ePointList,
+        .primitiveRestartEnable = vk::False};
 
     std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport,
                                                    vk::DynamicState::eScissor};
@@ -161,7 +200,7 @@ export struct VulkanPipeline {
         .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
         .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
         .colorBlendOp = vk::BlendOp::eAdd,
-        .srcAlphaBlendFactor = vk::BlendFactor::eOne,
+        .srcAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
         .dstAlphaBlendFactor = vk::BlendFactor::eZero,
         .alphaBlendOp = vk::BlendOp::eAdd,
         .colorWriteMask =
@@ -174,9 +213,10 @@ export struct VulkanPipeline {
         .pAttachments = &colorBlendAttachment};
 
     // Pipeline layout
-    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 1,
-                                                    .pSetLayouts = &*descriptorSetLayout,
-                                                    .pushConstantRangeCount = 0};
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
+    //                                           {.setLayoutCount = 1,
+    //                                            .pSetLayouts = &*descriptorSetLayout,
+    //                                            .pushConstantRangeCount = 0};
     pipelineLayout = vk::raii::PipelineLayout(device.device, pipelineLayoutInfo);
 
     // Render passes for dynamic rendering
@@ -201,6 +241,22 @@ export struct VulkanPipeline {
     graphicsPipeline =
         vk::raii::Pipeline(device.device, nullptr,
                            pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
+  }
+
+  void createComputePipeline(const VulkanDevice& device) {
+    vk::raii::ShaderModule shaderModule =
+        createShaderModule(device, readFile("shaders/shader_slang.spv"));
+
+    vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+        .stage = vk::ShaderStageFlagBits::eCompute,
+        .module = shaderModule,
+        .pName = "compMain"};
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+        .setLayoutCount = 1, .pSetLayouts = &*computeDescriptorSetLayout};
+    computePipelineLayout = vk::raii::PipelineLayout(device.device, pipelineLayoutInfo);
+    vk::ComputePipelineCreateInfo pipelineInfo{.stage = computeShaderStageInfo,
+                                               .layout = *computePipelineLayout};
+    computePipeline = vk::raii::Pipeline(device.device, nullptr, pipelineInfo);
   }
 
   [[nodiscard]] vk::raii::ShaderModule createShaderModule(

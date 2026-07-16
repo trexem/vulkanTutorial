@@ -28,17 +28,21 @@ export struct VulkanDevice {
   vk::raii::Device device = nullptr;
   vk::raii::Queue graphicsQueue = nullptr;
   vk::raii::Queue transferQueue = nullptr;
+  vk::raii::Queue computeQueue = nullptr;
   vk::raii::CommandPool graphicsCommandPool = nullptr;
   vk::raii::CommandPool transferCommandPool = nullptr;
+  vk::raii::CommandPool computeCommandPool = nullptr;
   vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
   vk::Format depthFormat = vk::Format::eUndefined;
   uint32_t graphicsQueueIndex = ~0;
   uint32_t transferQueueIndex = ~0;
+  uint32_t computeQueueIndex = ~0;
   VmaAllocator allocator = nullptr;
 
   void init(const VulkanContext& context) {
     pickPhysicalDevice(context);
-    createLogicalDevice(context);
+    findQueueIndexes(context);
+    createLogicalDevice();
     createCommandPools();
     initVma(context);
     depthFormat = findDepthFormat();
@@ -71,14 +75,17 @@ export struct VulkanDevice {
     auto features = physicalDevice.template getFeatures2<
         vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
         vk::PhysicalDeviceVulkan13Features,
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+        vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>();
     bool supportsRequiredFeatures =
         features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
         features.template get<vk::PhysicalDeviceVulkan11Features>()
             .shaderDrawParameters &&
         features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
         features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>()
-            .extendedDynamicState;
+            .extendedDynamicState &&
+        features.template get<vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>()
+            .timelineSemaphore;
 
     bool supportsVulkan1_4 = deviceProperties.apiVersion >= vk::ApiVersion14;
     bool supportsGraphics = std::ranges::any_of(queueFamilies, [](auto const& qfp) {
@@ -98,37 +105,91 @@ export struct VulkanDevice {
            supportsRequiredFeatures;
   }
 
-  void createLogicalDevice(const VulkanContext& context) {
+  void findQueueIndexes(const VulkanContext& context) {
     std::vector<vk::QueueFamilyProperties> queueFamilyProperties =
         physicalDevice.getQueueFamilyProperties();
-
-    for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++) {
-      if (transferQueueIndex != ~0 && graphicsQueueIndex != ~0) break;
-      if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eTransfer) &&
-          !(queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics)) {
-        transferQueueIndex = qfpIndex;
-        continue;
-      }
-      if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
-          physicalDevice.getSurfaceSupportKHR(qfpIndex, *context.surface)) {
-        graphicsQueueIndex = qfpIndex;
-        continue;
+    for (uint32_t i = 0; i < queueFamilyProperties.size(); i++) {
+      if ((queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) &&
+          physicalDevice.getSurfaceSupportKHR(i, *context.surface)) {
+        graphicsQueueIndex = i;
+        break;
       }
     }
 
     if (graphicsQueueIndex == ~0) {
       throw std::runtime_error(
-          "Could not find a graphics queue for graphics and present -> terminating");
+          "Could not find a queue family supporting graphics + Present!");
     }
+
+    for (uint32_t i = 0; i < queueFamilyProperties.size(); i++) {
+      const auto& flags = queueFamilyProperties[i].queueFlags;
+      // Trying to get dedicated transfer queue family
+      if ((flags & vk::QueueFlagBits::eTransfer) &&
+          !(flags & vk::QueueFlagBits::eGraphics) &&
+          !(flags & vk::QueueFlagBits::eCompute) && transferQueueIndex == ~0) {
+        transferQueueIndex = i;
+      }
+      // Trying to get dedicated compute queue family
+      if ((flags & vk::QueueFlagBits::eCompute) &&
+          !(flags & vk::QueueFlagBits::eGraphics) && computeQueueIndex == ~0) {
+        computeQueueIndex = i;
+      }
+    }
+    // If no dedicated transfer queue, look for any queue supporting transfer that isn't
+    // graphics
     if (transferQueueIndex == ~0) {
-      throw std::runtime_error(
-          "Could not find a transfer queue for different than graphics");
+      for (uint32_t i = 0; i < queueFamilyProperties.size(); ++i) {
+        if ((queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eTransfer) &&
+            i != graphicsQueueIndex) {
+          transferQueueIndex = i;
+          break;
+        }
+      }
     }
+    // Ultimate transfer fallback: just share the graphics queue family
+    if (transferQueueIndex == ~0) {
+      if (queueFamilyProperties[graphicsQueueIndex].queueFlags &
+          vk::QueueFlagBits::eTransfer) {
+        transferQueueIndex = graphicsQueueIndex;
+      }
+    }
+
+    // If no dedicated compute queue, look for any queue supporting compute that isn't
+    // graphics
+    if (computeQueueIndex == ~0) {
+      for (uint32_t i = 0; i < queueFamilyProperties.size(); ++i) {
+        if ((queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eCompute) &&
+            i != graphicsQueueIndex) {
+          computeQueueIndex = i;
+          break;
+        }
+      }
+    }
+    // Ultimate compute fallback: just share the graphics queue family
+    if (computeQueueIndex == ~0) {
+      if (queueFamilyProperties[graphicsQueueIndex].queueFlags &
+          vk::QueueFlagBits::eCompute) {
+        computeQueueIndex = graphicsQueueIndex;
+      }
+    }
+
+    // Final safety validation
+    if (transferQueueIndex == ~0 || computeQueueIndex == ~0) {
+      throw std::runtime_error(
+          "Incompatible hardware: Could not resolve fallback Compute/Transfer "
+          "requirements.");
+    }
+    std::cout << "Graphics, Transfer, Compute " << graphicsQueueIndex << " "
+              << transferQueueIndex << " " << computeQueueIndex << std::endl;
+  }
+
+  void createLogicalDevice() {
     float queuePriority = 0.5f;
 
     vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
                        vk::PhysicalDeviceVulkan13Features,
-                       vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
+                       vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+                       vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>
         featureChain = {
             {.features = {.samplerAnisotropy = true}},  // vk::PhysicalDeviceFeatures2
             {.shaderDrawParameters = true},  // vk::PhysicalDeviceVulkan11Features
@@ -137,7 +198,8 @@ export struct VulkanDevice {
                 .dynamicRendering = true,
             },  // vk::PhysicalDeviceVulkan13Features
             {.extendedDynamicState =
-                 true}  // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+                 true},  // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+            {.timelineSemaphore = true}  // vk::PhysicalDeviceTimelineSempahoreFeaturesKHR
         };
 
     std::vector<vk::DeviceQueueCreateInfo> deviceQueueCreateInfos{
@@ -146,11 +208,14 @@ export struct VulkanDevice {
          .pQueuePriorities = &queuePriority},
         {.queueFamilyIndex = transferQueueIndex,
          .queueCount = 1,
+         .pQueuePriorities = &queuePriority},
+        {.queueFamilyIndex = computeQueueIndex,
+         .queueCount = 1,
          .pQueuePriorities = &queuePriority}};
 
     vk::DeviceCreateInfo deviceCreateInfo{
         .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
-        .queueCreateInfoCount = 2,
+        .queueCreateInfoCount = 3,
         .pQueueCreateInfos = deviceQueueCreateInfos.data(),
         .enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtension.size()),
         .ppEnabledExtensionNames = requiredDeviceExtension.data()};
@@ -158,6 +223,7 @@ export struct VulkanDevice {
     device = vk::raii::Device(physicalDevice, deviceCreateInfo);
     graphicsQueue = vk::raii::Queue(device, graphicsQueueIndex, 0);
     transferQueue = vk::raii::Queue(device, transferQueueIndex, 0);
+    computeQueue = vk::raii::Queue(device, computeQueueIndex, 0);
   }
 
   void createCommandPools() {
@@ -170,6 +236,10 @@ export struct VulkanDevice {
                  vk::CommandPoolCreateFlagBits::eTransient,
         .queueFamilyIndex = transferQueueIndex};
     transferCommandPool = vk::raii::CommandPool(device, transferPoolInfo);
+    vk::CommandPoolCreateInfo computePoolInfo{
+        .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+        .queueFamilyIndex = computeQueueIndex};
+    computeCommandPool = vk::raii::CommandPool(device, computePoolInfo);
   }
 
   void initVma(const VulkanContext& context) {

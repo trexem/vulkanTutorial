@@ -56,16 +56,32 @@ export class VulkanBufferFactory {
  public:
   static VulkanBuffer create(const VulkanDevice& device, vk::DeviceSize size,
                              vk::BufferUsageFlags usage, VmaMemoryUsage vmaUsage) {
-    std::array<uint32_t, 2> queueFamilyIndices = {device.graphicsQueueIndex,
-                                                  device.transferQueueIndex};
     VulkanBuffer outBuffer;
     outBuffer.allocator = device.allocator;
 
-    vk::BufferCreateInfo bufferInfo{.size = size,
-                                    .usage = usage,
-                                    .sharingMode = vk::SharingMode::eConcurrent,
-                                    .queueFamilyIndexCount = 2,
-                                    .pQueueFamilyIndices = queueFamilyIndices.data()};
+    std::vector<uint32_t> uniqueFamilies;
+    uniqueFamilies.push_back(device.graphicsQueueIndex);
+
+    if ((usage & vk::BufferUsageFlagBits::eTransferDst) ||
+        (usage & vk::BufferUsageFlagBits::eTransferSrc)) {
+      uniqueFamilies.push_back(device.transferQueueIndex);
+    }
+    if (usage & vk::BufferUsageFlagBits::eStorageBuffer) {
+      uniqueFamilies.push_back(device.computeQueueIndex);
+    }
+    std::sort(uniqueFamilies.begin(), uniqueFamilies.end());
+    auto it = std::unique(uniqueFamilies.begin(), uniqueFamilies.end());
+    uniqueFamilies.erase(it, uniqueFamilies.end());
+
+    vk::BufferCreateInfo bufferInfo{.size = size, .usage = usage};
+    if (uniqueFamilies.size() > 1) {
+      bufferInfo.sharingMode = vk::SharingMode::eConcurrent;
+      bufferInfo.queueFamilyIndexCount = static_cast<uint32_t>(uniqueFamilies.size());
+      bufferInfo.pQueueFamilyIndices = uniqueFamilies.data();
+    } else {
+      bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+    }
+
     VmaAllocationCreateInfo allocCreateInfo{.usage = vmaUsage};
     if (vmaUsage == VMA_MEMORY_USAGE_AUTO_PREFER_HOST ||
         vmaUsage == VMA_MEMORY_USAGE_AUTO) {
